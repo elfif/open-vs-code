@@ -6,6 +6,44 @@ export interface SessionListItem {
   readonly id: string;
   readonly title: string;
   readonly updatedAt: number;
+  readonly agent?: string;
+  readonly model?: PromptModel;
+}
+
+export interface PromptModel {
+  readonly providerID: string;
+  readonly id: string;
+  readonly variant?: string;
+}
+
+export interface PromptSelection {
+  readonly agent: string;
+  readonly model: PromptModel;
+}
+
+export interface AgentOption {
+  readonly id: string;
+  readonly name: string;
+  readonly model?: PromptModel;
+}
+
+export interface ModelOption {
+  readonly id: string;
+  readonly providerID: string;
+  readonly name: string;
+  readonly variants: readonly string[];
+}
+
+export interface ProviderOption {
+  readonly id: string;
+  readonly name: string;
+}
+
+export interface PromptCatalog {
+  readonly agents: readonly AgentOption[];
+  readonly models: readonly ModelOption[];
+  readonly providers: readonly ProviderOption[];
+  readonly defaultModel: PromptModel | null;
 }
 
 export interface SessionGroup {
@@ -69,7 +107,12 @@ export type WebviewToExtension =
   | { readonly type: "closeTab"; readonly tabID: string }
   | { readonly type: "retry" }
   | { readonly type: "createSession" }
-  | { readonly type: "submitPrompt"; readonly sessionID: string; readonly text: string };
+  | {
+      readonly type: "submitPrompt";
+      readonly sessionID: string;
+      readonly text: string;
+      readonly selection: PromptSelection;
+    };
 
 export type ExtensionToWebview =
   | {
@@ -102,6 +145,12 @@ export type ExtensionToWebview =
   | {
       readonly type: "sessionCreation";
       readonly status: "idle" | "creating" | "error";
+      readonly error?: string;
+    }
+  | {
+      readonly type: "promptCatalog";
+      readonly status: LoadStatus;
+      readonly catalog: PromptCatalog | null;
       readonly error?: string;
     }
   | {

@@ -4,6 +4,8 @@ import {
   SESSIONS_TAB_ID,
   type ExtensionToWebview,
   type LoadStatus,
+  type PromptCatalog,
+  type PromptSelection,
   type SessionListItem,
   type SessionTab,
   type TranscriptItem,
@@ -32,6 +34,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private authSubmitting = false;
   private creatingSession = false;
   private sessions: SessionListItem[] = [];
+  private promptCatalog: PromptCatalog | null = null;
   private transcriptItems: TranscriptItem[] = [];
   private tabs: SessionTab[] = [sessionsTab()];
   private activeTabID = SESSIONS_TAB_ID;
@@ -124,7 +127,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         await this.createSession();
         break;
       case "submitPrompt":
-        await this.submitPrompt(message.sessionID, message.text);
+        await this.submitPrompt(message.sessionID, message.text, message.selection);
         break;
     }
   }
@@ -264,6 +267,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         );
         this.sessions = [session, ...this.sessions.filter((item) => item.id !== session.id)];
+        this.postMessage({
+          type: "sessions",
+          status: "ready",
+          groups: groupSessionsByUpdateDate(this.sessions),
+        });
         this.openTabForSession(session.title, session.id);
         await this.refreshSessions();
       });
@@ -287,7 +295,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async submitPrompt(sessionID: string, rawText: string): Promise<void> {
+  private async submitPrompt(
+    sessionID: string,
+    rawText: string,
+    selection: PromptSelection,
+  ): Promise<void> {
     if (!this.api || this.promptSubmitting.has(sessionID)) {
       return;
     }
@@ -308,7 +320,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           return;
         }
 
-        await this.api.prompt(sessionID, text, AbortSignal.timeout(REQUEST_TIMEOUT_MS));
+        await this.api.prompt(sessionID, text, selection, AbortSignal.timeout(REQUEST_TIMEOUT_MS));
         this.setOptimisticallyActive(sessionID);
         this.postMessage({ type: "promptStatus", sessionID, status: "accepted" });
 
@@ -344,6 +356,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         return;
       }
 
+      await this.refreshPromptCatalog();
       await this.refreshActiveStatus();
       const sessionsRefreshed = await this.refreshSessions();
 
@@ -353,6 +366,49 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
       await this.refreshTranscript();
     });
+  }
+
+  private async refreshPromptCatalog(): Promise<void> {
+    if (!this.api) {
+      return;
+    }
+
+    const directory = this.getWorkspaceDirectory();
+
+    if (!directory) {
+      this.promptCatalog = { agents: [], models: [], providers: [], defaultModel: null };
+      this.postMessage({ type: "promptCatalog", status: "ready", catalog: this.promptCatalog });
+      return;
+    }
+
+    this.postMessage({
+      type: "promptCatalog",
+      status: "loading",
+      catalog: this.promptCatalog,
+    });
+
+    try {
+      const catalog = await this.api.getPromptCatalog(
+        directory,
+        AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      );
+      this.promptCatalog = catalog;
+      this.postMessage({ type: "promptCatalog", status: "ready", catalog });
+    } catch (error) {
+      const apiError = toApiError(error);
+
+      if (apiError.kind === "auth") {
+        this.requireAuth(apiError.message);
+        return;
+      }
+
+      this.postMessage({
+        type: "promptCatalog",
+        status: "error",
+        catalog: this.promptCatalog,
+        error: apiError.message,
+      });
+    }
   }
 
   private async refreshActiveStatus(): Promise<void> {
@@ -471,6 +527,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     this.stopPolling();
     this.api = undefined;
     this.sessions = [];
+    this.promptCatalog = null;
     this.tabs = [sessionsTab()];
     this.activeTabID = SESSIONS_TAB_ID;
     this.activeSessionIds.clear();
@@ -480,6 +537,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     this.sendTabs();
     this.postMessage({ type: "sessions", status: "idle", groups: [] });
     this.postMessage({ type: "sessionCreation", status: "idle" });
+    this.postMessage({ type: "promptCatalog", status: "idle", catalog: null });
     this.postMessage({
       type: "connection",
       status: "unauthenticated",
@@ -665,8 +723,10 @@ function isWebviewMessage(value: unknown): value is WebviewToExtension {
       return (
         "sessionID" in value &&
         "text" in value &&
+        "selection" in value &&
         typeof value.sessionID === "string" &&
-        typeof value.text === "string"
+        typeof value.text === "string" &&
+        isPromptSelection(value.selection)
       );
     case "activateTab":
     case "closeTab":
@@ -674,6 +734,29 @@ function isWebviewMessage(value: unknown): value is WebviewToExtension {
     default:
       return false;
   }
+}
+
+function isPromptSelection(value: unknown): value is PromptSelection {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "agent" in value &&
+    "model" in value &&
+    typeof value.agent === "string" &&
+    isPromptModel(value.model)
+  );
+}
+
+function isPromptModel(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "providerID" in value &&
+    "id" in value &&
+    typeof value.providerID === "string" &&
+    typeof value.id === "string" &&
+    (!("variant" in value) || typeof value.variant === "string")
+  );
 }
 
 function getNonce(): string {

@@ -3,11 +3,18 @@ import {
   OpenCode,
   isForbiddenError,
   isUnauthorizedError,
+  type ModelRef,
   type SessionInfo,
   type SessionMessageInfo,
 } from "@opencode/client";
 
-import type { SessionListItem, TranscriptItem } from "../shared/protocol";
+import type {
+  PromptCatalog,
+  PromptModel,
+  PromptSelection,
+  SessionListItem,
+  TranscriptItem,
+} from "../shared/protocol";
 import { normalizeTranscriptMessages } from "./transcript";
 
 export const SESSION_PAGE_SIZE = 50;
@@ -158,7 +165,52 @@ export class OpenCodeApi {
     return toSessionListItem(response);
   }
 
-  public async prompt(sessionID: string, text: string, signal?: AbortSignal): Promise<void> {
+  public async getPromptCatalog(directory: string, signal?: AbortSignal): Promise<PromptCatalog> {
+    const [agents, models, providers, defaultModel] = await Promise.all([
+      this.client.agent.list({ location: { directory } }, { signal }),
+      this.client.model.list({ location: { directory } }, { signal }),
+      this.client.provider.list({ location: { directory } }, { signal }),
+      this.client.model
+        .default({ location: { directory } }, { signal })
+        .catch(() => ({ data: null })),
+    ]);
+    const availableProviderIds = new Set(
+      providers.data
+        .filter((provider) => provider.activation !== "disabled")
+        .map((provider) => provider.id),
+    );
+
+    return {
+      agents: agents.data
+        .filter((agent) => !agent.hidden && agent.mode !== "subagent")
+        .map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+          ...(agent.model ? { model: toPromptModel(agent.model) } : {}),
+        })),
+      models: models.data
+        .filter((model) => model.enabled && availableProviderIds.has(model.providerID))
+        .map((model) => ({
+          id: model.id,
+          providerID: model.providerID,
+          name: model.name,
+          variants: model.variants.map((variant) => variant.id),
+        })),
+      providers: providers.data
+        .filter((provider) => provider.activation !== "disabled")
+        .map((provider) => ({ id: provider.id, name: provider.name })),
+      defaultModel: defaultModel.data ? toPromptModel(defaultModel.data) : null,
+    };
+  }
+
+  public async prompt(
+    sessionID: string,
+    text: string,
+    selection: PromptSelection,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.client.session.switchAgent({ sessionID, agent: selection.agent }, { signal });
+    await this.client.session.switchModel({ sessionID, model: selection.model }, { signal });
     await this.client.session.prompt(
       {
         sessionID,
@@ -179,6 +231,16 @@ function toSessionListItem(session: SessionInfo): SessionListItem {
     id: session.id,
     title: session.title?.trim() || "Untitled session",
     updatedAt: session.time.updated ?? session.time.created,
+    ...(session.agent ? { agent: session.agent } : {}),
+    ...(session.model ? { model: toPromptModel(session.model) } : {}),
+  };
+}
+
+function toPromptModel(model: ModelRef): PromptModel {
+  return {
+    providerID: model.providerID,
+    id: model.id,
+    ...(model.variant ? { variant: model.variant } : {}),
   };
 }
 
