@@ -105,13 +105,15 @@ export function toApiError(error: unknown): ApiError {
 export class OpenCodeApi {
   private readonly client: ReturnType<typeof OpenCode.make>;
 
-  public constructor(credential: OpenCodeCredential) {
-    this.client = OpenCode.make({
-      baseUrl: normalizeServerUrl(credential.serverUrl),
-      headers: {
-        authorization: basicAuthHeader(credential.password),
-      },
-    });
+  public constructor(credential: OpenCodeCredential, client?: ReturnType<typeof OpenCode.make>) {
+    this.client =
+      client ??
+      OpenCode.make({
+        baseUrl: normalizeServerUrl(credential.serverUrl),
+        headers: {
+          authorization: basicAuthHeader(credential.password),
+        },
+      });
   }
 
   public async validateConnection(signal?: AbortSignal): Promise<string> {
@@ -143,6 +145,32 @@ export class OpenCodeApi {
     );
 
     return normalizeTranscriptMessages([...response.data].reverse());
+  }
+
+  public async createSession(directory: string, signal?: AbortSignal): Promise<SessionListItem> {
+    const response = await this.client.session.create(
+      {
+        location: { directory },
+      },
+      { signal },
+    );
+
+    return toSessionListItem(response);
+  }
+
+  public async prompt(sessionID: string, text: string, signal?: AbortSignal): Promise<void> {
+    await this.client.session.prompt(
+      {
+        sessionID,
+        text,
+      },
+      { signal },
+    );
+  }
+
+  public async getActiveSessionIds(signal?: AbortSignal): Promise<Set<string>> {
+    const response = await this.client.session.active({ signal });
+    return new Set(Object.keys(response));
   }
 }
 

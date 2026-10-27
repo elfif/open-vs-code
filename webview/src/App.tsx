@@ -1,6 +1,7 @@
 import { useEffect, useReducer } from "react";
 
 import { AuthPanel } from "@/components/AuthPanel";
+import { PromptComposer } from "@/components/PromptComposer";
 import { SessionList } from "@/components/SessionList";
 import { SessionTabs } from "@/components/SessionTabs";
 import { TranscriptView } from "@/components/TranscriptView";
@@ -25,11 +26,17 @@ interface PanelState {
   readonly sessionStatus: LoadStatus;
   readonly sessionGroups: readonly SessionGroup[];
   readonly sessionError?: string;
+  readonly creatingSession: boolean;
+  readonly createSessionError?: string;
   readonly tabs: readonly SessionTab[];
   readonly activeTabID: string;
   readonly transcriptStatus: LoadStatus;
   readonly transcriptItems: readonly TranscriptItem[];
   readonly transcriptError?: string;
+  readonly draftsBySession: Readonly<Record<string, string>>;
+  readonly promptStatusBySession: Readonly<
+    Record<string, { readonly status: "submitting" | "error"; readonly error?: string }>
+  >;
 }
 
 const initialState: PanelState = {
@@ -39,13 +46,20 @@ const initialState: PanelState = {
   workspaceDirectory: null,
   sessionStatus: "idle",
   sessionGroups: [],
+  creatingSession: false,
   tabs: [{ id: SESSIONS_TAB_ID, title: "Sessions", closable: false }],
   activeTabID: SESSIONS_TAB_ID,
   transcriptStatus: "idle",
   transcriptItems: [],
+  draftsBySession: {},
+  promptStatusBySession: {},
 };
 
-type PanelAction = ExtensionToWebview | { readonly type: "hideAuthSuccess" };
+type PanelAction =
+  | ExtensionToWebview
+  | { readonly type: "hideAuthSuccess" }
+  | { readonly type: "updateDraft"; readonly sessionID: string; readonly value: string }
+  | { readonly type: "clearDraft"; readonly sessionID: string };
 
 function reducer(state: PanelState, action: PanelAction): PanelState {
   switch (action.type) {
@@ -72,6 +86,12 @@ function reducer(state: PanelState, action: PanelAction): PanelState {
         sessionGroups: action.groups,
         sessionError: action.error,
       };
+    case "sessionCreation":
+      return {
+        ...state,
+        creatingSession: action.status === "creating",
+        createSessionError: action.status === "error" ? action.error : undefined,
+      };
     case "tabs":
       return { ...state, tabs: action.tabs, activeTabID: action.activeTabID };
     case "transcript":
@@ -81,6 +101,45 @@ function reducer(state: PanelState, action: PanelAction): PanelState {
         transcriptItems: action.items,
         transcriptError: action.error,
       };
+    case "promptStatus": {
+      if (action.status === "accepted") {
+        const nextDrafts = { ...state.draftsBySession };
+        delete nextDrafts[action.sessionID];
+        const nextPromptStatus = { ...state.promptStatusBySession };
+        delete nextPromptStatus[action.sessionID];
+
+        return {
+          ...state,
+          draftsBySession: nextDrafts,
+          promptStatusBySession: nextPromptStatus,
+        };
+      }
+
+      return {
+        ...state,
+        promptStatusBySession: {
+          ...state.promptStatusBySession,
+          [action.sessionID]: {
+            status: action.status,
+            error: action.status === "error" ? action.error : undefined,
+          },
+        },
+      };
+    }
+    case "updateDraft":
+      return {
+        ...state,
+        draftsBySession: {
+          ...state.draftsBySession,
+          [action.sessionID]: action.value,
+        },
+      };
+    case "clearDraft": {
+      const nextDrafts = { ...state.draftsBySession };
+      delete nextDrafts[action.sessionID];
+
+      return { ...state, draftsBySession: nextDrafts };
+    }
   }
 }
 
@@ -110,6 +169,9 @@ export default function App() {
   }, [state.authSuccessVisible]);
 
   const activeSessionTab = state.activeTabID !== SESSIONS_TAB_ID;
+  const activePromptStatus = activeSessionTab
+    ? state.promptStatusBySession[state.activeTabID]
+    : undefined;
 
   return (
     <main className="flex h-full min-h-0 flex-col bg-background text-foreground">
@@ -128,24 +190,51 @@ export default function App() {
 
       {state.connectionStatus === "connected" ? (
         <>
-          <SessionTabs tabs={state.tabs} activeTabID={state.activeTabID} />
+          <SessionTabs
+            tabs={state.tabs}
+            activeTabID={state.activeTabID}
+            onCloseTab={(tabID) => {
+              postToExtension({ type: "closeTab", tabID });
+              dispatch({ type: "clearDraft", sessionID: tabID });
+            }}
+          />
           {state.authSuccessVisible ? (
             <div className="border-b border-border bg-accent px-3 py-2 text-xs text-accent-foreground">
               Connected to OpenCode.
             </div>
           ) : null}
           {activeSessionTab ? (
-            <TranscriptView
-              items={state.transcriptItems}
-              loading={state.transcriptStatus === "loading"}
-              error={state.transcriptError}
-            />
+            <>
+              <TranscriptView
+                items={state.transcriptItems}
+                loading={state.transcriptStatus === "loading"}
+                error={state.transcriptError}
+              />
+              <PromptComposer
+                value={state.draftsBySession[state.activeTabID] ?? ""}
+                submitting={activePromptStatus?.status === "submitting"}
+                error={activePromptStatus?.error}
+                disabled={state.connectionStatus !== "connected"}
+                onChange={(value) =>
+                  dispatch({ type: "updateDraft", sessionID: state.activeTabID, value })
+                }
+                onSubmit={() =>
+                  postToExtension({
+                    type: "submitPrompt",
+                    sessionID: state.activeTabID,
+                    text: state.draftsBySession[state.activeTabID] ?? "",
+                  })
+                }
+              />
+            </>
           ) : (
             <SessionList
               groups={state.sessionGroups}
               loading={state.sessionStatus === "loading"}
               error={state.sessionError}
               hasWorkspace={state.workspaceDirectory !== null}
+              creating={state.creatingSession}
+              createError={state.createSessionError}
             />
           )}
         </>

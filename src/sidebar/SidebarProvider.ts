@@ -14,22 +14,31 @@ import { OpenCodeApi, normalizeServerUrl, toApiError } from "../services/openCod
 import { PollingController } from "../services/pollingController";
 import { groupSessionsByUpdateDate } from "../services/sessionGroups";
 
-const POLL_INTERVAL_MS = 10_000;
+const SESSION_LIST_POLL_MS = 10_000;
+const ACTIVE_TRANSCRIPT_POLL_MS = 2_000;
+const IDLE_TRANSCRIPT_POLL_MS = 20_000;
+const OPTIMISTIC_ACTIVE_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 10_000;
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "openVsCode.sidebar";
 
   private readonly credentialStore: CredentialStore;
-  private readonly polling: PollingController;
+  private readonly sessionPolling: PollingController;
+  private readonly transcriptPolling: PollingController;
   private api: OpenCodeApi | undefined;
   private credential: StoredCredential | undefined;
   private visible = false;
   private authSubmitting = false;
+  private creatingSession = false;
   private sessions: SessionListItem[] = [];
   private transcriptItems: TranscriptItem[] = [];
   private tabs: SessionTab[] = [sessionsTab()];
   private activeTabID = SESSIONS_TAB_ID;
+  private activeSessionIds = new Set<string>();
+  private activePromptSessionID: string | null = null;
+  private activePromptAt = 0;
+  private promptSubmitting = new Set<string>();
   private queue: Promise<void> = Promise.resolve();
 
   public constructor(
@@ -37,7 +46,23 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     secrets: vscode.SecretStorage,
   ) {
     this.credentialStore = new CredentialStore(secrets);
-    this.polling = new PollingController(POLL_INTERVAL_MS, () => this.refreshAll());
+    this.sessionPolling = new PollingController(SESSION_LIST_POLL_MS, () =>
+      this.enqueue(async () => {
+        await this.refreshSessions();
+      }),
+    );
+    this.transcriptPolling = new PollingController(
+      () => this.transcriptIntervalMs(),
+      () =>
+        this.enqueue(async () => {
+          if (this.activeTabID === SESSIONS_TAB_ID) {
+            return;
+          }
+
+          await this.refreshActiveStatus();
+          await this.refreshTranscript();
+        }),
+    );
   }
 
   public resolveWebviewView(
@@ -56,7 +81,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     const visibilitySubscription = webviewView.onDidChangeVisibility(() => {
       this.visible = webviewView.visible;
-      this.polling.setVisible(this.visible);
+      this.applyPollingVisibility();
     });
 
     const messageSubscription = webviewView.webview.onDidReceiveMessage((message: unknown) => {
@@ -64,7 +89,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     });
 
     webviewView.onDidDispose(() => {
-      this.polling.dispose();
+      this.sessionPolling.dispose();
+      this.transcriptPolling.dispose();
       visibilitySubscription.dispose();
       messageSubscription.dispose();
     });
@@ -94,6 +120,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       case "retry":
         await this.refreshAll();
         break;
+      case "createSession":
+        await this.createSession();
+        break;
+      case "submitPrompt":
+        await this.submitPrompt(message.sessionID, message.text);
+        break;
     }
   }
 
@@ -118,7 +150,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         serverUrl: credential.serverUrl,
       });
       await this.refreshAll();
-      this.polling.setVisible(this.visible);
+      this.applyPollingVisibility();
     } catch (error) {
       this.requireAuth(toApiError(error).message);
     }
@@ -130,7 +162,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
 
     this.authSubmitting = true;
-    this.polling.setVisible(false);
+    this.stopPolling();
     this.postMessage({ type: "authSubmitting", value: true });
 
     try {
@@ -148,7 +180,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this.postMessage({ type: "connection", status: "connected", serverUrl });
       this.postMessage({ type: "authSuccess" });
       await this.refreshAll();
-      this.polling.setVisible(this.visible);
+      this.applyPollingVisibility();
     } catch (error) {
       this.authSubmitting = false;
       this.postMessage({ type: "authSubmitting", value: false });
@@ -157,13 +189,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async openSession(sessionID: string): Promise<void> {
-    if (!this.tabs.some((tab) => tab.id === sessionID)) {
-      const title = this.sessions.find((session) => session.id === sessionID)?.title ?? "Session";
-      this.tabs = [...this.tabs, { id: sessionID, title, closable: true }];
-    }
-
-    this.activeTabID = sessionID;
-    this.sendTabs();
+    const session = this.sessions.find((candidate) => candidate.id === sessionID);
+    this.openTabForSession(session?.title ?? "Session", sessionID);
     await this.refreshTranscript();
   }
 
@@ -207,12 +234,117 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private async createSession(): Promise<void> {
+    if (!this.api || this.creatingSession) {
+      return;
+    }
+
+    const directory = this.getWorkspaceDirectory();
+
+    if (!directory) {
+      this.postMessage({
+        type: "sessionCreation",
+        status: "error",
+        error: "Open a workspace folder before creating an OpenCode session.",
+      });
+      return;
+    }
+
+    this.creatingSession = true;
+    this.postMessage({ type: "sessionCreation", status: "creating" });
+
+    try {
+      await this.enqueue(async () => {
+        if (!this.api) {
+          return;
+        }
+
+        const session = await this.api.createSession(
+          directory,
+          AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        );
+        this.sessions = [session, ...this.sessions.filter((item) => item.id !== session.id)];
+        this.openTabForSession(session.title, session.id);
+        await this.refreshSessions();
+      });
+
+      this.postMessage({ type: "sessionCreation", status: "idle" });
+    } catch (error) {
+      const apiError = toApiError(error);
+
+      if (apiError.kind === "auth") {
+        this.requireAuth(apiError.message);
+        return;
+      }
+
+      this.postMessage({
+        type: "sessionCreation",
+        status: "error",
+        error: apiError.message,
+      });
+    } finally {
+      this.creatingSession = false;
+    }
+  }
+
+  private async submitPrompt(sessionID: string, rawText: string): Promise<void> {
+    if (!this.api || this.promptSubmitting.has(sessionID)) {
+      return;
+    }
+
+    const text = rawText.trim();
+
+    if (!text) {
+      return;
+    }
+
+    this.promptSubmitting.add(sessionID);
+    this.setOptimisticallyActive(sessionID);
+    this.postMessage({ type: "promptStatus", sessionID, status: "submitting" });
+
+    try {
+      await this.enqueue(async () => {
+        if (!this.api) {
+          return;
+        }
+
+        await this.api.prompt(sessionID, text, AbortSignal.timeout(REQUEST_TIMEOUT_MS));
+        this.setOptimisticallyActive(sessionID);
+        this.postMessage({ type: "promptStatus", sessionID, status: "accepted" });
+
+        if (this.activeTabID === sessionID) {
+          await this.refreshTranscript();
+        }
+
+        await this.refreshSessions();
+      });
+    } catch (error) {
+      const apiError = toApiError(error);
+
+      if (apiError.kind === "auth") {
+        this.requireAuth(apiError.message);
+        return;
+      }
+
+      this.clearOptimisticallyActive(sessionID);
+      this.postMessage({
+        type: "promptStatus",
+        sessionID,
+        status: "error",
+        error: apiError.message,
+      });
+    } finally {
+      this.promptSubmitting.delete(sessionID);
+    }
+  }
+
   private async refreshAll(): Promise<void> {
     await this.enqueue(async () => {
       if (!this.api) {
         return;
       }
 
+      await this.refreshActiveStatus();
       const sessionsRefreshed = await this.refreshSessions();
 
       if (!sessionsRefreshed || !this.api) {
@@ -221,6 +353,33 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
       await this.refreshTranscript();
     });
+  }
+
+  private async refreshActiveStatus(): Promise<void> {
+    if (!this.api || this.activeTabID === SESSIONS_TAB_ID) {
+      return;
+    }
+
+    try {
+      const activeSessionIds = await this.api.getActiveSessionIds(
+        AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      );
+      this.activeSessionIds = activeSessionIds;
+
+      if (
+        this.activePromptSessionID &&
+        !activeSessionIds.has(this.activePromptSessionID) &&
+        Date.now() - this.activePromptAt > OPTIMISTIC_ACTIVE_MS
+      ) {
+        this.activePromptSessionID = null;
+      }
+    } catch (error) {
+      const apiError = toApiError(error);
+
+      if (apiError.kind === "auth") {
+        this.requireAuth(apiError.message);
+      }
+    }
   }
 
   private async refreshSessions(): Promise<boolean> {
@@ -248,6 +407,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       );
       this.sessions = sessions;
+      this.syncTabTitles(sessions);
       this.postMessage({
         type: "sessions",
         status: "ready",
@@ -308,14 +468,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private requireAuth(message: string, serverUrl?: string): void {
-    this.polling.setVisible(false);
+    this.stopPolling();
     this.api = undefined;
     this.sessions = [];
     this.tabs = [sessionsTab()];
     this.activeTabID = SESSIONS_TAB_ID;
+    this.activeSessionIds.clear();
+    this.activePromptSessionID = null;
+    this.promptSubmitting.clear();
     this.clearTranscript();
     this.sendTabs();
     this.postMessage({ type: "sessions", status: "idle", groups: [] });
+    this.postMessage({ type: "sessionCreation", status: "idle" });
     this.postMessage({
       type: "connection",
       status: "unauthenticated",
@@ -331,6 +495,82 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   private sendTabs(): void {
     this.postMessage({ type: "tabs", tabs: this.tabs, activeTabID: this.activeTabID });
+  }
+
+  private openTabForSession(title: string, sessionID: string): void {
+    if (!this.tabs.some((tab) => tab.id === sessionID)) {
+      this.tabs = [...this.tabs, { id: sessionID, title, closable: true }];
+    }
+
+    this.activeTabID = sessionID;
+    this.sendTabs();
+  }
+
+  private syncTabTitles(sessions: readonly SessionListItem[]): void {
+    let changed = false;
+
+    this.tabs = this.tabs.map((tab) => {
+      if (tab.id === SESSIONS_TAB_ID) {
+        return tab;
+      }
+
+      const session = sessions.find((candidate) => candidate.id === tab.id);
+
+      if (session && session.title !== tab.title) {
+        changed = true;
+        return { ...tab, title: session.title };
+      }
+
+      return tab;
+    });
+
+    if (changed) {
+      this.sendTabs();
+    }
+  }
+
+  private setOptimisticallyActive(sessionID: string): void {
+    this.activePromptSessionID = sessionID;
+    this.activePromptAt = Date.now();
+  }
+
+  private clearOptimisticallyActive(sessionID: string): void {
+    if (this.activePromptSessionID === sessionID) {
+      this.activePromptSessionID = null;
+    }
+  }
+
+  private transcriptIntervalMs(): number {
+    if (this.activeTabID === SESSIONS_TAB_ID) {
+      return IDLE_TRANSCRIPT_POLL_MS;
+    }
+
+    if (this.activeSessionIds.has(this.activeTabID)) {
+      return ACTIVE_TRANSCRIPT_POLL_MS;
+    }
+
+    if (this.promptSubmitting.has(this.activeTabID)) {
+      return ACTIVE_TRANSCRIPT_POLL_MS;
+    }
+
+    if (
+      this.activePromptSessionID === this.activeTabID &&
+      Date.now() - this.activePromptAt < OPTIMISTIC_ACTIVE_MS
+    ) {
+      return ACTIVE_TRANSCRIPT_POLL_MS;
+    }
+
+    return IDLE_TRANSCRIPT_POLL_MS;
+  }
+
+  private applyPollingVisibility(): void {
+    this.sessionPolling.setVisible(this.visible);
+    this.transcriptPolling.setVisible(this.visible);
+  }
+
+  private stopPolling(): void {
+    this.sessionPolling.setVisible(false);
+    this.transcriptPolling.setVisible(false);
   }
 
   private getWorkspaceDirectory(): string | null {
@@ -410,6 +650,7 @@ function isWebviewMessage(value: unknown): value is WebviewToExtension {
   switch (value.type) {
     case "ready":
     case "retry":
+    case "createSession":
       return true;
     case "authenticate":
       return (
@@ -420,6 +661,13 @@ function isWebviewMessage(value: unknown): value is WebviewToExtension {
       );
     case "openSession":
       return "sessionID" in value && typeof value.sessionID === "string";
+    case "submitPrompt":
+      return (
+        "sessionID" in value &&
+        "text" in value &&
+        typeof value.sessionID === "string" &&
+        typeof value.text === "string"
+      );
     case "activateTab":
     case "closeTab":
       return "tabID" in value && typeof value.tabID === "string";

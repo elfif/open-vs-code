@@ -16,6 +16,8 @@ const defaultScheduler: TimerScheduler = {
   },
 };
 
+export type PollingInterval = number | (() => number);
+
 export class PollingController {
   private visible = false;
   private pending = false;
@@ -23,7 +25,7 @@ export class PollingController {
   private disposed = false;
 
   public constructor(
-    private readonly intervalMs: number,
+    private readonly interval: PollingInterval,
     private readonly tick: () => Promise<void>,
     private readonly scheduler: TimerScheduler = defaultScheduler,
   ) {}
@@ -75,10 +77,11 @@ export class PollingController {
 
   private schedule(): void {
     this.cancelTimer();
+    const intervalMs = typeof this.interval === "function" ? this.interval() : this.interval;
     this.timer = this.scheduler.setTimeout(() => {
       this.timer = undefined;
       void this.run();
-    }, this.intervalMs);
+    }, intervalMs);
   }
 
   private cancelTimer(): void {

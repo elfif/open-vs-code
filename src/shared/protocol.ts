@@ -67,7 +67,9 @@ export type WebviewToExtension =
   | { readonly type: "openSession"; readonly sessionID: string }
   | { readonly type: "activateTab"; readonly tabID: string }
   | { readonly type: "closeTab"; readonly tabID: string }
-  | { readonly type: "retry" };
+  | { readonly type: "retry" }
+  | { readonly type: "createSession" }
+  | { readonly type: "submitPrompt"; readonly sessionID: string; readonly text: string };
 
 export type ExtensionToWebview =
   | {
@@ -95,5 +97,16 @@ export type ExtensionToWebview =
       readonly sessionID: string | null;
       readonly status: LoadStatus;
       readonly items: readonly TranscriptItem[];
+      readonly error?: string;
+    }
+  | {
+      readonly type: "sessionCreation";
+      readonly status: "idle" | "creating" | "error";
+      readonly error?: string;
+    }
+  | {
+      readonly type: "promptStatus";
+      readonly sessionID: string;
+      readonly status: "submitting" | "accepted" | "error";
       readonly error?: string;
     };

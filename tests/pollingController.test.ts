@@ -87,6 +87,24 @@ describe("PollingController", () => {
     expect(scheduler.timers.size).toBe(1);
   });
 
+  it("uses a dynamic interval when provided", async () => {
+    let interval = 1000;
+    const tick = vi.fn(async () => undefined);
+    const scheduler = new FakeScheduler();
+    const controller = new PollingController(() => interval, tick, scheduler);
+
+    controller.setVisible(true);
+    await Promise.resolve();
+    expect(scheduler.timers.size).toBe(1);
+
+    interval = 2000;
+    scheduler.runAll();
+    await Promise.resolve();
+
+    expect(tick).toHaveBeenCalledTimes(2);
+    expect(scheduler.timers.size).toBe(1);
+  });
+
   it("stops scheduling after dispose", async () => {
     const tick = vi.fn(async () => undefined);
     const scheduler = new FakeScheduler();

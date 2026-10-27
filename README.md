@@ -1,8 +1,8 @@
 # Open VS Code
 
-Open VS Code is a VS Code extension that connects directly to an OpenCode V2 HTTP server and shows a read-only OpenCode session browser in the sidebar.
+Open VS Code is a VS Code extension that connects directly to an OpenCode V2 HTTP server and provides an OpenCode session browser and prompt composer in the sidebar.
 
-## V1 features
+## Features
 
 - Dedicated OpenCode sidebar.
 - Command Palette command: `Open OpenCode Panel`.
@@ -17,13 +17,18 @@ Open VS Code is a VS Code extension that connects directly to an OpenCode V2 HTT
 - In-sidebar tabs:
   - Permanent Sessions tab
   - Closable session detail tabs
-- Read-only transcript rendering:
+- Create a new OpenCode session from the Sessions view.
+- Send plain-text prompts to existing sessions.
+- Per-session prompt drafts.
+- Transcript rendering:
   - User and assistant Markdown
   - Reasoning blocks
   - Tool call blocks
   - Activity/system messages
-- 10-second polling while the sidebar is visible.
-- Active transcript polling only.
+- Visible-only polling:
+  - Session list every 10 seconds.
+  - Active transcript every 2 seconds while OpenCode is actively handling the session.
+  - Active transcript every 20 seconds when idle.
 - Scroll position preservation during polling.
 
 ## Prerequisites
@@ -121,14 +126,37 @@ When a session is opened, the extension fetches the latest 50 messages and displ
 
 No older-message pagination is included in V1.
 
+### Session creation
+
+The Sessions view includes a **New session** button. It creates a session in the first workspace folder using OpenCode's default agent, model, and permission settings.
+
+The new session opens in a sidebar tab immediately after creation.
+
+### Prompting
+
+Each open session tab has a plain-text prompt composer.
+
+- The Send button submits the trimmed prompt.
+- Enter inserts a newline.
+- Empty prompts cannot be submitted.
+- Drafts are stored per open session tab.
+- Closing a tab discards its draft.
+- Failed submissions preserve the draft and show an inline error.
+- Accepted submissions clear the draft and refresh the transcript.
+
+Prompt submission returns as soon as OpenCode accepts the prompt. Assistant output continues asynchronously and is refreshed by polling.
+
 ### Polling
 
-Polling runs every 10 seconds while the OpenCode sidebar is visible.
+Polling runs only while the OpenCode sidebar is visible.
 
-It refreshes:
+Intervals:
 
-- The session list.
-- The active session transcript.
+- Session list: every 10 seconds.
+- Active transcript while the session is active: every 2 seconds.
+- Active transcript while idle: every 20 seconds.
+
+The extension uses OpenCode's active-session endpoint to decide whether the active session is currently being handled. After a prompt is accepted, it also treats the session as active briefly to avoid missing the transition into the running state.
 
 Polling pauses when the sidebar is hidden and refreshes immediately when it becomes visible again.
 
@@ -154,9 +182,10 @@ webview/
   src/
     components/
       AuthPanel.tsx             Authentication form
-      SessionTabs.tsx           In-sidebar tabs
-      SessionList.tsx           Grouped session list
-      TranscriptView.tsx        Read-only transcript renderer
+      PromptComposer.tsx      Plain-text prompt composer
+      SessionTabs.tsx         In-sidebar tabs
+      SessionList.tsx         Grouped session list and new-session action
+      TranscriptView.tsx      Transcript renderer
       ui/                       shadcn/ui components
     lib/
       vscode.ts                 VS Code webview bridge
@@ -171,10 +200,16 @@ dist/
   webview/                      Bundled webview output
 ```
 
-## Excluded from V1
+## Excluded
 
 - Starting or managing the OpenCode server.
-- Sending prompts or modifying sessions.
+- Tool configuration or manual tool invocation.
+- OpenCode commands and shortcut handling.
+- MCP selection or configuration.
+- Model or agent selection.
+- File attachments, mentions, and skills.
+- Streaming/event subscriptions.
+- Stop, cancel, revert, rename, or delete actions.
 - Session search.
 - Pagination or infinite loading.
 - Background polling while hidden.

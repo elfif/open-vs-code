@@ -7,9 +7,10 @@ import type { SessionTab } from "@shared/protocol";
 interface SessionTabsProps {
   readonly tabs: readonly SessionTab[];
   readonly activeTabID: string;
+  readonly onCloseTab: (tabID: string) => void;
 }
 
-export function SessionTabs({ tabs, activeTabID }: SessionTabsProps) {
+export function SessionTabs({ tabs, activeTabID, onCloseTab }: SessionTabsProps) {
   return (
     <div
       role="tablist"
@@ -44,7 +45,7 @@ export function SessionTabs({ tabs, activeTabID }: SessionTabsProps) {
                 size="icon"
                 className="size-5 shrink-0"
                 aria-label={`Close ${tab.title}`}
-                onClick={() => postToExtension({ type: "closeTab", tabID: tab.id })}
+                onClick={() => onCloseTab(tab.id)}
               >
                 <X className="size-3" />
               </Button>
