@@ -13,7 +13,9 @@
   ],
   "activationEvents": [
     "onView:openVsCode.sidebar",
-    "onCommand:openVsCode.openPanel"
+    "onCommand:openVsCode.openPanel",
+    "onCommand:openVsCode.addFilesToSession",
+    "onCommand:openVsCode.addSelectionToSession"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -21,6 +23,54 @@
       {
         "command": "openVsCode.openPanel",
         "title": "Open OpenCode Panel"
+      },
+      {
+        "command": "openVsCode.addFilesToSession",
+        "title": "OpenCode: Add to Session"
+      },
+      {
+        "command": "openVsCode.addSelectionToSession",
+        "title": "OpenCode: Add to Session"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "openVsCode.addFilesToSession",
+          "when": "false"
+        },
+        {
+          "command": "openVsCode.addSelectionToSession",
+          "when": "editorHasSelection && resourceScheme == file"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "openVsCode.addFilesToSession",
+          "when": "resourceScheme == file && !explorerResourceIsFolder",
+          "group": "navigation@100"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "openVsCode.addSelectionToSession",
+          "when": "editorHasSelection && resourceScheme == file",
+          "group": "navigation@100"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "openVsCode.addSelectionToSession",
+        "key": "ctrl+alt+o",
+        "mac": "cmd+alt+o",
+        "when": "editorTextFocus && editorHasSelection && resourceScheme == file"
+      },
+      {
+        "command": "openVsCode.addFilesToSession",
+        "key": "ctrl+alt+o",
+        "mac": "cmd+alt+o",
+        "when": "filesExplorerFocus && !explorerResourceIsFolder && !inputFocus"
       }
     ],
     "viewsContainers": {

@@ -1,3 +1,5 @@
+import type { PromptContextSegment, PromptSegment } from "./promptContent";
+
 export const SESSIONS_TAB_ID = "sessions";
 
 export type ConnectionStatus = "checking" | "unauthenticated" | "connected";
@@ -110,7 +112,7 @@ export type WebviewToExtension =
   | {
       readonly type: "submitPrompt";
       readonly sessionID: string;
-      readonly text: string;
+      readonly parts: readonly PromptSegment[];
       readonly selection: PromptSelection;
     };
 
@@ -158,4 +160,9 @@ export type ExtensionToWebview =
       readonly sessionID: string;
       readonly status: "submitting" | "accepted" | "error";
       readonly error?: string;
+    }
+  | {
+      readonly type: "insertContext";
+      readonly sessionID: string;
+      readonly segments: readonly PromptContextSegment[];
     };

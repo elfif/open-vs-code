@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 
 import { AuthPanel } from "@/components/AuthPanel";
-import { PromptComposer } from "@/components/PromptComposer";
+import { PromptComposer, type PendingContextInsert } from "@/components/PromptComposer";
 import { SessionList } from "@/components/SessionList";
 import { SessionTabs } from "@/components/SessionTabs";
 import { TranscriptView } from "@/components/TranscriptView";
@@ -13,6 +13,7 @@ import {
   reconcilePromptSelection,
 } from "@/lib/promptSelection";
 import { onExtensionMessage, postToExtension } from "@/lib/vscode";
+import type { PromptSegment } from "@shared/promptContent";
 import {
   SESSIONS_TAB_ID,
   type ConnectionStatus,
@@ -43,7 +44,9 @@ interface PanelState {
   readonly transcriptStatus: LoadStatus;
   readonly transcriptItems: readonly TranscriptItem[];
   readonly transcriptError?: string;
-  readonly draftsBySession: Readonly<Record<string, string>>;
+  readonly draftsBySession: Readonly<Record<string, readonly PromptSegment[]>>;
+  readonly draftVersionsBySession: Readonly<Record<string, number>>;
+  readonly pendingInsertsBySession: Readonly<Record<string, readonly PendingContextInsert[]>>;
   readonly promptCatalogStatus: LoadStatus;
   readonly promptCatalog: PromptCatalog | null;
   readonly promptCatalogError?: string;
@@ -66,16 +69,32 @@ const initialState: PanelState = {
   transcriptStatus: "idle",
   transcriptItems: [],
   draftsBySession: {},
+  draftVersionsBySession: {},
+  pendingInsertsBySession: {},
   promptCatalogStatus: "idle",
   promptCatalog: null,
   selectionsBySession: {},
   promptStatusBySession: {},
 };
 
+const EMPTY_PROMPT: readonly PromptSegment[] = [];
+const EMPTY_INSERTS: readonly PendingContextInsert[] = [];
+
+let nextContextInsertID = 1;
+
 type PanelAction =
   | ExtensionToWebview
   | { readonly type: "hideAuthSuccess" }
-  | { readonly type: "updateDraft"; readonly sessionID: string; readonly value: string }
+  | {
+      readonly type: "updateDraft";
+      readonly sessionID: string;
+      readonly value: readonly PromptSegment[];
+    }
+  | {
+      readonly type: "insertsConsumed";
+      readonly sessionID: string;
+      readonly insertIDs: readonly number[];
+    }
   | { readonly type: "selectAgent"; readonly sessionID: string; readonly agentID: string }
   | { readonly type: "selectModel"; readonly sessionID: string; readonly model: ModelOption }
   | {
@@ -156,6 +175,10 @@ function reducer(state: PanelState, action: PanelAction): PanelState {
         return {
           ...state,
           draftsBySession: nextDrafts,
+          draftVersionsBySession: {
+            ...state.draftVersionsBySession,
+            [action.sessionID]: (state.draftVersionsBySession[action.sessionID] ?? 0) + 1,
+          },
           promptStatusBySession: nextPromptStatus,
         };
       }
@@ -171,6 +194,17 @@ function reducer(state: PanelState, action: PanelAction): PanelState {
         },
       };
     }
+    case "insertContext":
+      return {
+        ...state,
+        pendingInsertsBySession: {
+          ...state.pendingInsertsBySession,
+          [action.sessionID]: [
+            ...(state.pendingInsertsBySession[action.sessionID] ?? []),
+            { id: nextContextInsertID++, segments: action.segments },
+          ],
+        },
+      };
     case "updateDraft":
       return {
         ...state,
@@ -179,6 +213,18 @@ function reducer(state: PanelState, action: PanelAction): PanelState {
           [action.sessionID]: action.value,
         },
       };
+    case "insertsConsumed": {
+      const consumed = new Set(action.insertIDs);
+      return {
+        ...state,
+        pendingInsertsBySession: {
+          ...state.pendingInsertsBySession,
+          [action.sessionID]: (state.pendingInsertsBySession[action.sessionID] ?? []).filter(
+            (pending) => !consumed.has(pending.id),
+          ),
+        },
+      };
+    }
     case "selectAgent": {
       const selection = state.selectionsBySession[action.sessionID];
 
@@ -226,13 +272,19 @@ function reducer(state: PanelState, action: PanelAction): PanelState {
     }
     case "clearSession": {
       const nextDrafts = { ...state.draftsBySession };
+      const nextDraftVersions = { ...state.draftVersionsBySession };
+      const nextPendingInserts = { ...state.pendingInsertsBySession };
       const nextSelections = { ...state.selectionsBySession };
       delete nextDrafts[action.sessionID];
+      delete nextDraftVersions[action.sessionID];
+      delete nextPendingInserts[action.sessionID];
       delete nextSelections[action.sessionID];
 
       return {
         ...state,
         draftsBySession: nextDrafts,
+        draftVersionsBySession: nextDraftVersions,
+        pendingInsertsBySession: nextPendingInserts,
         selectionsBySession: nextSelections,
       };
     }
@@ -371,7 +423,9 @@ export default function App() {
                 error={state.transcriptError}
               />
               <PromptComposer
-                value={state.draftsBySession[state.activeTabID] ?? ""}
+                key={`${state.activeTabID}:${state.draftVersionsBySession[state.activeTabID] ?? 0}`}
+                value={state.draftsBySession[state.activeTabID] ?? EMPTY_PROMPT}
+                pendingInserts={state.pendingInsertsBySession[state.activeTabID] ?? EMPTY_INSERTS}
                 submitting={activePromptStatus?.status === "submitting"}
                 error={activePromptStatus?.error}
                 disabled={state.connectionStatus !== "connected"}
@@ -382,6 +436,9 @@ export default function App() {
                 selection={activeSelection}
                 onChange={(value) =>
                   dispatch({ type: "updateDraft", sessionID: state.activeTabID, value })
+                }
+                onInsertsConsumed={(insertIDs) =>
+                  dispatch({ type: "insertsConsumed", sessionID: state.activeTabID, insertIDs })
                 }
                 onAgentChange={(agentID) =>
                   dispatch({ type: "selectAgent", sessionID: state.activeTabID, agentID })
@@ -400,7 +457,7 @@ export default function App() {
                   postToExtension({
                     type: "submitPrompt",
                     sessionID: state.activeTabID,
-                    text: state.draftsBySession[state.activeTabID] ?? "",
+                    parts: state.draftsBySession[state.activeTabID] ?? EMPTY_PROMPT,
                     selection: activeSelection,
                   });
                 }}

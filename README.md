@@ -19,7 +19,8 @@ Open VS Code is a VS Code extension that connects directly to an OpenCode V2 HTT
   - Closable session detail tabs
 - Create a new OpenCode session from the Sessions view.
 - Send plain-text prompts to existing sessions.
-- Per-session prompt drafts.
+- Add files or exact editor selections as inline context badges from VS Code context menus or `Ctrl+Alt+O` (`Cmd+Alt+O` on macOS).
+- Per-session prompt drafts, including context badges.
 - Transcript rendering:
   - User and assistant Markdown
   - Reasoning blocks
@@ -134,9 +135,13 @@ The new session opens in a sidebar tab immediately after creation.
 
 ### Prompting
 
-Each open session tab has a plain-text prompt composer.
+Each open session tab has a plain-text prompt composer with inline context badges.
 
-- The Send button submits the trimmed prompt.
+- Right-click a file (or multiple files) in the Explorer and choose **OpenCode: Add to Session** to insert filename badges. Submitted prompts contain the absolute paths.
+- Right-click selected code and choose **OpenCode: Add to Session** to insert a filename/line-range badge. The badge tooltip shows the captured code. Submitted prompts contain the absolute path, line range, language, and exact selected code in a `### File content` block, even if the file changes later.
+- `Ctrl+Alt+O` (`Cmd+Alt+O` on macOS) invokes the same command from the editor or Explorer.
+- Context is inserted at the last prompt caret, or at the end. If the Sessions tab is active, a new session is created first.
+- The Send button submits the trimmed prompt with badges expanded to their text representation.
 - Enter inserts a newline.
 - Empty prompts cannot be submitted.
 - Drafts are stored per open session tab.
@@ -169,6 +174,7 @@ src/
   extension.ts                  Extension activation and command registration
   shared/
     protocol.ts                 Typed extension/webview messages
+    promptContent.ts            Context badges and prompt serialization
   services/
     credentialStore.ts          SecretStorage-backed credential persistence
     openCodeApi.ts              OpenCode V2 API wrapper and error classification
@@ -177,12 +183,13 @@ src/
     transcript.ts               Transcript normalization
   sidebar/
     SidebarProvider.ts          Webview lifecycle, state, and polling orchestration
+    selectionContext.ts         Editor selection line ranges
 
 webview/
   src/
     components/
       AuthPanel.tsx             Authentication form
-      PromptComposer.tsx      Plain-text prompt composer
+      PromptComposer.tsx      Lexical prompt composer with context badges
       SessionTabs.tsx         In-sidebar tabs
       SessionList.tsx         Grouped session list and new-session action
       TranscriptView.tsx      Transcript renderer
@@ -207,11 +214,10 @@ dist/
 - OpenCode commands and shortcut handling.
 - MCP selection or configuration.
 - Model or agent selection.
-- File attachments, mentions, and skills.
+- Binary file attachments, @-mentions, and skills.
 - Streaming/event subscriptions.
 - Stop, cancel, revert, rename, or delete actions.
 - Session search.
 - Pagination or infinite loading.
 - Background polling while hidden.
 - Polling inactive session tabs.
-- File Explorer context-menu integration.

@@ -1,6 +1,13 @@
 import * as vscode from "vscode";
 
 import {
+  isPromptEmpty,
+  isPromptSegment,
+  serializePrompt,
+  type PromptContextSegment,
+  type PromptSegment,
+} from "../shared/promptContent";
+import {
   SESSIONS_TAB_ID,
   type ExtensionToWebview,
   type LoadStatus,
@@ -43,6 +50,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private activePromptAt = 0;
   private promptSubmitting = new Set<string>();
   private queue: Promise<void> = Promise.resolve();
+  private webviewReady = false;
+  private pendingContexts: PromptContextSegment[][] = [];
 
   public constructor(
     private readonly extensionUri: vscode.Uri,
@@ -80,6 +89,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.html = this.getHtmlForWebview(webviewView.webview);
 
+    this.webviewReady = false;
     this.visible = webviewView.visible;
 
     const visibilitySubscription = webviewView.onDidChangeVisibility(() => {
@@ -92,11 +102,44 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     });
 
     webviewView.onDidDispose(() => {
+      this.webviewReady = false;
       this.sessionPolling.dispose();
       this.transcriptPolling.dispose();
       visibilitySubscription.dispose();
       messageSubscription.dispose();
     });
+  }
+
+  public async addContext(segments: readonly PromptContextSegment[]): Promise<void> {
+    if (segments.length === 0) {
+      return;
+    }
+
+    await vscode.commands.executeCommand(`${SidebarProvider.viewType}.focus`);
+
+    if (!this.webviewReady) {
+      this.pendingContexts.push([...segments]);
+      return;
+    }
+
+    if (!this.api) {
+      void vscode.window.showWarningMessage("Connect to an OpenCode server before adding context.");
+      return;
+    }
+
+    let sessionID = this.activeTabID;
+
+    if (sessionID === SESSIONS_TAB_ID) {
+      const createdSessionID = await this.createSession();
+
+      if (!createdSessionID) {
+        return;
+      }
+
+      sessionID = createdSessionID;
+    }
+
+    this.postMessage({ type: "insertContext", sessionID, segments });
   }
 
   private async handleMessage(message: unknown): Promise<void> {
@@ -106,7 +149,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     switch (message.type) {
       case "ready":
+        this.webviewReady = true;
         await this.initialize();
+        await this.flushPendingContexts();
         break;
       case "authenticate":
         await this.authenticate(message.serverUrl, message.password);
@@ -127,7 +172,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         await this.createSession();
         break;
       case "submitPrompt":
-        await this.submitPrompt(message.sessionID, message.text, message.selection);
+        await this.submitPrompt(message.sessionID, message.parts, message.selection);
         break;
     }
   }
@@ -156,6 +201,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this.applyPollingVisibility();
     } catch (error) {
       this.requireAuth(toApiError(error).message);
+    }
+  }
+
+  private async flushPendingContexts(): Promise<void> {
+    const pending = this.pendingContexts;
+    this.pendingContexts = [];
+
+    for (const segments of pending) {
+      await this.addContext(segments);
     }
   }
 
@@ -237,9 +291,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async createSession(): Promise<void> {
+  private async createSession(): Promise<string | undefined> {
     if (!this.api || this.creatingSession) {
-      return;
+      return undefined;
     }
 
     const directory = this.getWorkspaceDirectory();
@@ -250,16 +304,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         status: "error",
         error: "Open a workspace folder before creating an OpenCode session.",
       });
-      return;
+      return undefined;
     }
 
     this.creatingSession = true;
     this.postMessage({ type: "sessionCreation", status: "creating" });
 
     try {
-      await this.enqueue(async () => {
+      const sessionID = await this.enqueue(async () => {
         if (!this.api) {
-          return;
+          return undefined;
         }
 
         const session = await this.api.createSession(
@@ -274,9 +328,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         });
         this.openTabForSession(session.title, session.id);
         await this.refreshSessions();
+        return session.id;
       });
 
       this.postMessage({ type: "sessionCreation", status: "idle" });
+      return sessionID;
     } catch (error) {
       const apiError = toApiError(error);
 
@@ -297,16 +353,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   private async submitPrompt(
     sessionID: string,
-    rawText: string,
+    parts: readonly PromptSegment[],
     selection: PromptSelection,
   ): Promise<void> {
     if (!this.api || this.promptSubmitting.has(sessionID)) {
       return;
     }
 
-    const text = rawText.trim();
+    const text = serializePrompt(parts);
 
-    if (!text) {
+    if (isPromptEmpty(parts)) {
       return;
     }
 
@@ -722,10 +778,11 @@ function isWebviewMessage(value: unknown): value is WebviewToExtension {
     case "submitPrompt":
       return (
         "sessionID" in value &&
-        "text" in value &&
+        "parts" in value &&
         "selection" in value &&
         typeof value.sessionID === "string" &&
-        typeof value.text === "string" &&
+        Array.isArray(value.parts) &&
+        value.parts.every(isPromptSegment) &&
         isPromptSelection(value.selection)
       );
     case "activateTab":
