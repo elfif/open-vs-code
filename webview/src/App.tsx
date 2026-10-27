@@ -1,4 +1,4 @@
-import { useEffect, useReducer } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 
 import { AuthPanel } from "@/components/AuthPanel";
 import { PromptComposer } from "@/components/PromptComposer";
@@ -145,6 +145,30 @@ function reducer(state: PanelState, action: PanelAction): PanelState {
 
 export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const panelRef = useRef<HTMLElement | null>(null);
+  const [panelHeight, setPanelHeight] = useState(0);
+
+  useEffect(() => {
+    const panel = panelRef.current;
+
+    if (!panel) {
+      return;
+    }
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+
+      if (entry) {
+        setPanelHeight(entry.contentRect.height);
+      }
+    });
+
+    observer.observe(panel);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onExtensionMessage((message) => {
@@ -174,7 +198,7 @@ export default function App() {
     : undefined;
 
   return (
-    <main className="flex h-full min-h-0 flex-col bg-background text-foreground">
+    <main ref={panelRef} className="flex h-full min-h-0 flex-col bg-background text-foreground">
       {state.connectionStatus === "checking" ? (
         <div className="p-4 text-xs text-muted-foreground">Checking OpenCode connection...</div>
       ) : null}
@@ -215,6 +239,7 @@ export default function App() {
                 submitting={activePromptStatus?.status === "submitting"}
                 error={activePromptStatus?.error}
                 disabled={state.connectionStatus !== "connected"}
+                panelHeight={panelHeight}
                 onChange={(value) =>
                   dispatch({ type: "updateDraft", sessionID: state.activeTabID, value })
                 }
