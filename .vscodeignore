@@ -1,0 +1,14 @@
+.vscode/**
+.gitignore
+.prettierignore
+.prettierrc.json
+eslint.config.mjs
+tests/**
+vitest.config.ts
+node_modules/**
+src/**
+webview/**
+tsconfig*.json
+esbuild.mjs
+**/*.ts
+**/*.map
