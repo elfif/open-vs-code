@@ -95,6 +95,17 @@ export function applyVariantSelection(
   };
 }
 
+export function selectedAgentColor(
+  catalog: PromptCatalog | null,
+  selection: PromptSelection | null,
+): string | undefined {
+  if (!catalog || !selection) {
+    return undefined;
+  }
+
+  return catalog.agents.find((agent) => agent.id === selection.agent)?.color;
+}
+
 export function selectedModelOption(
   catalog: PromptCatalog,
   selection: PromptSelection,

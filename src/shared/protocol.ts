@@ -34,6 +34,8 @@ export interface AgentOption {
   readonly id: string;
   readonly name: string;
   readonly model?: PromptModel;
+  /** UI color resolved in the extension host (declared color, else palette by position). */
+  readonly color?: string;
 }
 
 export interface ModelOption {

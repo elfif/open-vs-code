@@ -8,6 +8,7 @@ import {
   type SessionMessageInfo,
 } from "@opencode/client";
 
+import { resolveAgentColor } from "../shared/agentColor";
 import type {
   PromptFileAttachmentInput,
   PromptSkillAttachmentInput,
@@ -197,13 +198,17 @@ export class OpenCodeApi {
         .filter((provider) => provider.activation !== "disabled")
         .map((provider) => provider.id),
     );
+    // TUI parity: auto colors are indexed against every visible agent, subagents
+    // included, so filtering the selectable list does not shift the palette.
+    const visibleAgents = agents.data.filter((agent) => !agent.hidden);
 
     return {
-      agents: agents.data
-        .filter((agent) => !agent.hidden && agent.mode !== "subagent")
+      agents: visibleAgents
+        .filter((agent) => agent.mode !== "subagent")
         .map((agent) => ({
           id: agent.id,
           name: agent.name,
+          color: resolveAgentColor(visibleAgents, agent.id),
           ...(agent.model ? { model: toPromptModel(agent.model) } : {}),
         })),
       models: models.data

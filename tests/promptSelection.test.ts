@@ -8,6 +8,7 @@ import {
   createPromptSelection,
   groupModelsByProvider,
   reconcilePromptSelection,
+  selectedAgentColor,
   selectedModelOption,
 } from "../webview/src/lib/promptSelection";
 
@@ -148,5 +149,28 @@ describe("model grouping", () => {
       { id: "openai", name: "OpenAI", models: [catalog.models[0]] },
     ]);
     expect(groupModelsByProvider(catalog, "missing")).toEqual([]);
+  });
+});
+
+describe("selectedAgentColor", () => {
+  const coloredCatalog: PromptCatalog = {
+    ...catalog,
+    agents: [
+      { ...catalog.agents[0], color: "#4e79a7" },
+      { ...catalog.agents[1], color: "#e15759" },
+    ],
+  };
+
+  it("returns the color of the selected agent", () => {
+    expect(selectedAgentColor(coloredCatalog, selection)).toBe("#e15759");
+  });
+
+  it("returns undefined when the selected agent has no color", () => {
+    expect(selectedAgentColor(catalog, selection)).toBeUndefined();
+  });
+
+  it("returns undefined without a catalog or selection", () => {
+    expect(selectedAgentColor(null, selection)).toBeUndefined();
+    expect(selectedAgentColor(catalog, null)).toBeUndefined();
   });
 });

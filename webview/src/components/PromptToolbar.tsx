@@ -4,7 +4,11 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { groupModelsByProvider, selectedModelOption } from "@/lib/promptSelection";
+import {
+  groupModelsByProvider,
+  selectedAgentColor,
+  selectedModelOption,
+} from "@/lib/promptSelection";
 import type { ModelOption, PromptCatalog, PromptSelection } from "@shared/protocol";
 
 const selectClassName =
@@ -31,12 +35,15 @@ export function PromptToolbar({
   const [query, setQuery] = useState("");
   const selectedModel = selectedModelOption(catalog, selection);
   const groups = groupModelsByProvider(catalog, query);
+  const agentColor = selectedAgentColor(catalog, selection);
+  const agentAccentStyle = agentColor ? { borderLeft: `4px solid ${agentColor}` } : undefined;
 
   return (
     <div className="mt-2 flex flex-wrap items-center gap-1.5">
       <select
         aria-label="Agent"
         className={`${selectClassName} max-w-32 flex-1`}
+        style={agentAccentStyle}
         value={selection.agent}
         disabled={disabled}
         onChange={(event) => onAgentChange(event.target.value)}
@@ -71,7 +78,7 @@ export function PromptToolbar({
         </Button>
         <DialogContent
           aria-describedby={undefined}
-          className="flex max-h-[80vh] flex-col gap-3 overflow-hidden p-4 sm:max-w-md"
+          className="flex max-h-[80vh] flex-col gap-2 overflow-hidden p-4 sm:max-w-md"
         >
           <DialogHeader>
             <DialogTitle className="text-sm">Select model</DialogTitle>
@@ -90,40 +97,32 @@ export function PromptToolbar({
               </p>
             ) : (
               groups.map((group) => (
-                <section key={group.id} className="mb-3 last:mb-0">
-                  <h3 className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    {group.name}
-                  </h3>
-                  <div className="flex flex-col gap-0.5">
-                    {group.models.map((model) => (
-                      <button
-                        key={`${model.providerID}:${model.id}`}
-                        type="button"
-                        aria-current={
-                          selection.model.providerID === model.providerID &&
-                          selection.model.id === model.id
-                            ? "true"
-                            : undefined
-                        }
-                        className={`rounded-md px-2 py-2 text-left hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
-                          selection.model.providerID === model.providerID &&
-                          selection.model.id === model.id
-                            ? "bg-accent text-accent-foreground"
-                            : ""
-                        }`}
-                        onClick={() => {
-                          onModelChange(model);
-                          setModelPickerOpen(false);
-                        }}
-                      >
-                        <span className="block truncate text-xs">{model.name}</span>
-                        {model.name !== model.id ? (
-                          <span className="block truncate text-[10px] text-muted-foreground">
-                            {model.id}
-                          </span>
-                        ) : null}
-                      </button>
-                    ))}
+                <section key={group.id} className="mb-2 last:mb-0">
+                  <h3 className="px-2 py-1 text-sm font-semibold text-foreground">{group.name}</h3>
+                  <div className="ml-3 flex flex-col gap-px border-l border-border pl-1">
+                    {group.models.map((model) => {
+                      const isSelected =
+                        selection.model.providerID === model.providerID &&
+                        selection.model.id === model.id;
+
+                      return (
+                        <button
+                          key={`${model.providerID}:${model.id}`}
+                          type="button"
+                          aria-current={isSelected ? "true" : undefined}
+                          className={`rounded-md px-2 py-1 text-left text-xs hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
+                            isSelected ? "bg-accent text-accent-foreground" : ""
+                          }`}
+                          style={isSelected ? agentAccentStyle : undefined}
+                          onClick={() => {
+                            onModelChange(model);
+                            setModelPickerOpen(false);
+                          }}
+                        >
+                          <span className="block truncate">{model.name}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </section>
               ))

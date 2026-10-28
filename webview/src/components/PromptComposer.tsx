@@ -14,6 +14,8 @@ import {
   $isElementNode,
   $isRangeSelection,
   $setSelection,
+  COMMAND_PRIORITY_HIGH,
+  KEY_ENTER_COMMAND,
   type RangeSelection,
 } from "lexical";
 
@@ -34,6 +36,7 @@ import {
   snapshotTransfer,
 } from "@/lib/dropZone";
 import { calculatePromptTextareaHeight } from "@/lib/promptHeight";
+import { selectedAgentColor } from "@/lib/promptSelection";
 import { postToExtension } from "@/lib/vscode";
 import { findContextLimit } from "@shared/contextBar";
 import {
@@ -273,6 +276,9 @@ export function PromptComposer({
     selection !== null &&
     !isPromptEmpty(value);
 
+  const agentColor = selectedAgentColor(catalog, selection);
+  const agentAccentStyle = agentColor ? { borderLeft: `4px solid ${agentColor}` } : undefined;
+
   return (
     <div ref={containerRef} className="shrink-0 border-t border-border bg-background p-2">
       <TooltipProvider delayDuration={300}>
@@ -301,6 +307,7 @@ export function PromptComposer({
                   aria-label="Prompt"
                   aria-multiline="true"
                   className="w-full resize-none whitespace-pre-wrap break-words rounded-md border border-input bg-input px-3 py-2 text-xs leading-5 text-foreground shadow-sm transition-colors focus-visible:border-ring focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+                  style={agentAccentStyle}
                 />
               }
               placeholder={
@@ -312,6 +319,7 @@ export function PromptComposer({
             />
             <HistoryPlugin />
             <EditablePlugin editable={!disabled && !submitting} />
+            <SubmitShortcutPlugin enabled={canSubmit} onSubmit={onSubmit} />
             <DraftPlugin onChange={onChange} />
             <InsertContextPlugin pendingInserts={pendingInserts} onConsumed={onInsertsConsumed} />
             <SkillPickerPlugin
@@ -398,6 +406,16 @@ export function PromptComposer({
               <Paperclip />
               Add files
             </Button>
+            <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+              <kbd className="rounded border border-border bg-muted px-1 font-sans text-[10px]">
+                Ctrl
+              </kbd>
+              <span>+</span>
+              <kbd className="rounded border border-border bg-muted px-1 font-sans text-[10px]">
+                Enter
+              </kbd>
+              <span>to send</span>
+            </span>
             <Button type="button" size="sm" disabled={!canSubmit} onClick={onSubmit}>
               {submitting ? "Sending..." : "Send"}
             </Button>
@@ -414,6 +432,46 @@ function EditablePlugin({ editable }: { readonly editable: boolean }) {
   useLayoutEffect(() => {
     editor.setEditable(editable);
   }, [editable, editor]);
+
+  return null;
+}
+
+function SubmitShortcutPlugin({
+  enabled,
+  onSubmit,
+}: {
+  readonly enabled: boolean;
+  readonly onSubmit: () => void;
+}) {
+  const [editor] = useLexicalComposerContext();
+  const enabledRef = useRef(enabled);
+  const onSubmitRef = useRef(onSubmit);
+
+  useEffect(() => {
+    enabledRef.current = enabled;
+    onSubmitRef.current = onSubmit;
+  }, [enabled, onSubmit]);
+
+  useLayoutEffect(() => {
+    // Ctrl+Enter (Cmd+Enter on macOS) submits instead of inserting a newline.
+    return editor.registerCommand(
+      KEY_ENTER_COMMAND,
+      (event) => {
+        if (event === null || event.shiftKey || !(event.ctrlKey || event.metaKey)) {
+          return false;
+        }
+
+        event.preventDefault();
+
+        if (enabledRef.current) {
+          onSubmitRef.current();
+        }
+
+        return true;
+      },
+      COMMAND_PRIORITY_HIGH,
+    );
+  }, [editor]);
 
   return null;
 }

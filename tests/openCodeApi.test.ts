@@ -2,6 +2,7 @@ import { ClientError, type OpenCodeClient } from "@opencode/client";
 import { describe, expect, it } from "vitest";
 
 import { basicAuthHeader, normalizeServerUrl, toApiError } from "../src/services/openCodeApi";
+import { AGENT_COLOR_PALETTE } from "../src/shared/agentColor";
 
 describe("normalizeServerUrl", () => {
   it("adds http and removes trailing slashes", () => {
@@ -182,6 +183,7 @@ describe("OpenCodeApi mutations", () => {
                 model: { providerID: "openai", id: "gpt-5", variant: "high" },
               },
               { id: "task", name: "Task", mode: "subagent", hidden: false },
+              { id: "plan", name: "Plan", mode: "primary", hidden: false },
               { id: "hidden", name: "Hidden", mode: "all", hidden: true },
             ],
           };
@@ -259,7 +261,14 @@ describe("OpenCodeApi mutations", () => {
         {
           id: "build",
           name: "Build",
+          color: AGENT_COLOR_PALETTE[0],
           model: { providerID: "openai", id: "gpt-5", variant: "high" },
+        },
+        {
+          id: "plan",
+          name: "Plan",
+          // Palette index 2: the visible `task` subagent occupies index 1 (TUI parity).
+          color: AGENT_COLOR_PALETTE[2],
         },
       ],
       models: [
