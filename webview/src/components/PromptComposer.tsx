@@ -1,4 +1,5 @@
-import { useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { Paperclip } from "lucide-react";
 import { LexicalComposer } from "@lexical/react/LexicalComposer";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import { ContentEditable } from "@lexical/react/LexicalContentEditable";
@@ -23,7 +24,13 @@ import {
 } from "@/components/ContextBadgeNode";
 import { PromptToolbar } from "@/components/PromptToolbar";
 import { Button } from "@/components/ui/button";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  canAcceptDragTypes,
+  canAcceptPaste,
+  resolveTransferUris,
+  snapshotTransfer,
+} from "@/lib/dropZone";
 import { calculatePromptTextareaHeight } from "@/lib/promptHeight";
 import { postToExtension } from "@/lib/vscode";
 import {
@@ -32,6 +39,9 @@ import {
   type PromptSegment,
 } from "@shared/promptContent";
 import type { LoadStatus, ModelOption, PromptCatalog, PromptSelection } from "@shared/protocol";
+
+const DRAG_HINT =
+  "VS Code blocks drag events over webviews while a drag is in progress, so a plain drop is routed to the editor instead of this panel. Hold Shift while dropping to deliver the files here.";
 
 export interface PendingContextInsert {
   readonly id: number;
@@ -42,7 +52,9 @@ interface PromptComposerProps {
   readonly value: readonly PromptSegment[];
   readonly pendingInserts: readonly PendingContextInsert[];
   readonly submitting: boolean;
+  readonly staging: boolean;
   readonly error?: string;
+  readonly documentError?: string;
   readonly disabled: boolean;
   readonly panelHeight: number;
   readonly catalog: PromptCatalog | null;
@@ -55,13 +67,19 @@ interface PromptComposerProps {
   readonly onModelChange: (model: ModelOption) => void;
   readonly onVariantChange: (variant: string | undefined) => void;
   readonly onSubmit: () => void;
+  readonly onPickFiles: () => void;
+  readonly onFiles: (files: readonly File[]) => void;
+  readonly onUris: (uris: readonly string[]) => void;
+  readonly onDocumentError: (error: string) => void;
 }
 
 export function PromptComposer({
   value,
   pendingInserts,
   submitting,
+  staging,
   error,
+  documentError,
   disabled,
   panelHeight,
   catalog,
@@ -74,9 +92,126 @@ export function PromptComposer({
   onModelChange,
   onVariantChange,
   onSubmit,
+  onPickFiles,
+  onFiles,
+  onUris,
+  onDocumentError,
 }: PromptComposerProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const editableRef = useRef<HTMLDivElement>(null);
-  const canSubmit = !disabled && !submitting && selection !== null && !isPromptEmpty(value);
+  const [dragActive, setDragActive] = useState(false);
+  const locked = disabled || submitting || staging;
+  const lockedRef = useRef(locked);
+  const onFilesRef = useRef(onFiles);
+  const onUrisRef = useRef(onUris);
+  const onDocumentErrorRef = useRef(onDocumentError);
+
+  useEffect(() => {
+    lockedRef.current = locked;
+    onFilesRef.current = onFiles;
+    onUrisRef.current = onUris;
+    onDocumentErrorRef.current = onDocumentError;
+  }, [locked, onFiles, onUris, onDocumentError]);
+
+  useEffect(() => {
+    const editable = editableRef.current;
+    const doc = editable ? editable.ownerDocument : document;
+    const handlers: TransferHandlers = { onFilesRef, onUrisRef, onDocumentErrorRef };
+
+    const isInsideComposer = (target: EventTarget | null): boolean => {
+      const container = containerRef.current;
+
+      return container !== null && target instanceof Node && container.contains(target);
+    };
+
+    const acceptsDrag = (event: DragEvent): boolean =>
+      event.dataTransfer !== null && canAcceptDragTypes(Array.from(event.dataTransfer.types));
+
+    const handleDragEnter = (event: DragEvent) => {
+      if (lockedRef.current || !isInsideComposer(event.target) || !acceptsDrag(event)) {
+        return;
+      }
+
+      setDragActive(true);
+    };
+
+    const handleDragOver = (event: DragEvent) => {
+      if (lockedRef.current || !isInsideComposer(event.target) || !acceptsDrag(event)) {
+        return;
+      }
+
+      event.preventDefault();
+
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = "copy";
+      }
+
+      setDragActive(true);
+    };
+
+    const handleDragLeave = (event: DragEvent) => {
+      if (!isInsideComposer(event.target)) {
+        return;
+      }
+
+      const next = event.relatedTarget;
+
+      if (next instanceof Node && isInsideComposer(next)) {
+        return;
+      }
+
+      setDragActive(false);
+    };
+
+    const handleDrop = (event: DragEvent) => {
+      if (!isInsideComposer(event.target)) {
+        return;
+      }
+
+      setDragActive(false);
+
+      if (lockedRef.current || !acceptsDrag(event)) {
+        return;
+      }
+
+      event.preventDefault();
+      processTransfer(event.dataTransfer, true, handlers);
+    };
+
+    const handleDragEnd = () => {
+      setDragActive(false);
+    };
+
+    const handlePaste = (event: ClipboardEvent) => {
+      if (lockedRef.current || !canAcceptPaste(snapshotTransfer(event.clipboardData))) {
+        return;
+      }
+
+      event.preventDefault();
+      processTransfer(event.clipboardData, false, handlers);
+    };
+
+    // Capture phase on the whole document: VS Code retargets and re-dispatches drag
+    // events into the webview, so listening only on the contentEditable element
+    // misses drops that land on the composer chrome or the editor's own padding.
+    const capture: AddEventListenerOptions = { capture: true, passive: false };
+
+    doc.addEventListener("dragenter", handleDragEnter, capture);
+    doc.addEventListener("dragover", handleDragOver, capture);
+    doc.addEventListener("dragleave", handleDragLeave, capture);
+    doc.addEventListener("drop", handleDrop, capture);
+    doc.addEventListener("dragend", handleDragEnd, capture);
+    editable?.addEventListener("paste", handlePaste);
+
+    return () => {
+      doc.removeEventListener("dragenter", handleDragEnter, capture);
+      doc.removeEventListener("dragover", handleDragOver, capture);
+      doc.removeEventListener("dragleave", handleDragLeave, capture);
+      doc.removeEventListener("drop", handleDrop, capture);
+      doc.removeEventListener("dragend", handleDragEnd, capture);
+      editable?.removeEventListener("paste", handlePaste);
+    };
+  }, []);
 
   useLayoutEffect(() => {
     const editable = editableRef.current;
@@ -107,8 +242,11 @@ export function PromptComposer({
     editable.style.overflowY = capped ? "auto" : "hidden";
   }, [value, panelHeight]);
 
+  const canSubmit =
+    !disabled && !submitting && !staging && selection !== null && !isPromptEmpty(value);
+
   return (
-    <div className="shrink-0 border-t border-border bg-background p-2">
+    <div ref={containerRef} className="shrink-0 border-t border-border bg-background p-2">
       <TooltipProvider delayDuration={300}>
         <LexicalComposer
           initialConfig={{
@@ -141,50 +279,86 @@ export function PromptComposer({
             <EditablePlugin editable={!disabled && !submitting} />
             <DraftPlugin onChange={onChange} />
             <InsertContextPlugin pendingInserts={pendingInserts} onConsumed={onInsertsConsumed} />
+            {dragActive && !locked ? (
+              <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-md border-2 border-dashed border-ring bg-background/85 px-3 text-center text-xs text-muted-foreground">
+                Drop files to add to this prompt
+              </div>
+            ) : null}
           </div>
         </LexicalComposer>
-      </TooltipProvider>
-      {catalog && selection ? (
-        <PromptToolbar
-          catalog={catalog}
-          selection={selection}
-          disabled={disabled || submitting || catalogStatus === "loading"}
-          onAgentChange={onAgentChange}
-          onModelChange={onModelChange}
-          onVariantChange={onVariantChange}
-        />
-      ) : null}
-      {catalogStatus === "loading" && !catalog ? (
-        <p className="mt-2 text-xs text-muted-foreground">Loading agents and models...</p>
-      ) : null}
-      {catalogStatus === "ready" && !selection ? (
-        <p className="mt-2 text-xs text-muted-foreground">
-          No selectable agents or models are available.
-        </p>
-      ) : null}
-      {catalogError ? (
-        <div role="alert" className="mt-2 flex items-center gap-2 text-xs text-destructive">
-          <span className="min-w-0 flex-1">{catalogError}</span>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => postToExtension({ type: "retry" })}
-          >
-            Retry
-          </Button>
+        {catalog && selection ? (
+          <PromptToolbar
+            catalog={catalog}
+            selection={selection}
+            disabled={disabled || submitting || catalogStatus === "loading"}
+            onAgentChange={onAgentChange}
+            onModelChange={onModelChange}
+            onVariantChange={onVariantChange}
+          />
+        ) : null}
+        {catalogStatus === "loading" && !catalog ? (
+          <p className="mt-2 text-xs text-muted-foreground">Loading agents and models...</p>
+        ) : null}
+        {catalogStatus === "ready" && !selection ? (
+          <p className="mt-2 text-xs text-muted-foreground">
+            No selectable agents or models are available.
+          </p>
+        ) : null}
+        {catalogError ? (
+          <div role="alert" className="mt-2 flex items-center gap-2 text-xs text-destructive">
+            <span className="min-w-0 flex-1">{catalogError}</span>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => postToExtension({ type: "retry" })}
+            >
+              Retry
+            </Button>
+          </div>
+        ) : null}
+        {staging ? <p className="mt-1 text-xs text-muted-foreground">Adding files...</p> : null}
+        {documentError ? (
+          <p role="alert" className="mt-1 whitespace-pre-line text-xs text-destructive">
+            {documentError}
+          </p>
+        ) : null}
+        {error ? (
+          <p role="alert" className="mt-1 text-xs text-destructive">
+            {error}
+          </p>
+        ) : null}
+        <div className="mt-2 flex items-center gap-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex min-w-0 cursor-help items-center text-[11px] leading-4 text-muted-foreground">
+                <span className="truncate">
+                  Drop files · hold{" "}
+                  <kbd className="rounded border border-border bg-muted px-1 font-sans text-[10px]">
+                    Shift
+                  </kbd>
+                </span>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top">{DRAG_HINT}</TooltipContent>
+          </Tooltip>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={locked}
+              onClick={onPickFiles}
+            >
+              <Paperclip />
+              Add files
+            </Button>
+            <Button type="button" size="sm" disabled={!canSubmit} onClick={onSubmit}>
+              {submitting ? "Sending..." : "Send"}
+            </Button>
+          </div>
         </div>
-      ) : null}
-      {error ? (
-        <p role="alert" className="mt-1 text-xs text-destructive">
-          {error}
-        </p>
-      ) : null}
-      <div className="mt-2 flex justify-end">
-        <Button size="sm" disabled={!canSubmit} onClick={onSubmit}>
-          {submitting ? "Sending..." : "Send"}
-        </Button>
-      </div>
+      </TooltipProvider>
     </div>
   );
 }
@@ -338,4 +512,90 @@ function readPromptSegments(): PromptSegment[] {
 
   flushText();
   return segments;
+}
+
+interface TransferHandlers {
+  readonly onFilesRef: RefObject<(files: readonly File[]) => void>;
+  readonly onUrisRef: RefObject<(uris: readonly string[]) => void>;
+  readonly onDocumentErrorRef: RefObject<(error: string) => void>;
+}
+
+function processTransfer(
+  dataTransfer: DataTransfer | null,
+  isDrop: boolean,
+  handlers: TransferHandlers,
+): void {
+  if (!dataTransfer) {
+    return;
+  }
+
+  const { files, errors } = collectFiles(dataTransfer);
+
+  if (errors.length > 0) {
+    handlers.onDocumentErrorRef.current(errors.join("\n"));
+  }
+
+  if (files.length > 0) {
+    handlers.onFilesRef.current(files);
+    return;
+  }
+
+  const uris = resolveTransferUris(snapshotTransfer(dataTransfer));
+
+  if (uris.length > 0) {
+    handlers.onUrisRef.current(uris);
+    return;
+  }
+
+  if (isDrop) {
+    handlers.onDocumentErrorRef.current(
+      'No supported file was detected in this drop. Use "Add files" to pick it instead.',
+    );
+  }
+}
+
+function getDirectoryEntry(
+  item: DataTransferItem,
+): { isDirectory?: boolean; name?: string } | null {
+  try {
+    return item.webkitGetAsEntry?.() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function collectFiles(dataTransfer: DataTransfer): { files: File[]; errors: string[] } {
+  const files: File[] = [];
+  const errors: string[] = [];
+  const items = Array.from(dataTransfer.items ?? []);
+
+  if (items.length === 0) {
+    files.push(...Array.from(dataTransfer.files));
+    return { files, errors };
+  }
+
+  for (const item of items) {
+    if (item.kind !== "file") {
+      continue;
+    }
+
+    const entry = getDirectoryEntry(item);
+
+    if (entry?.isDirectory) {
+      errors.push(`${entry.name ?? "Folder"} is a folder.`);
+      continue;
+    }
+
+    try {
+      const file = item.getAsFile();
+
+      if (file) {
+        files.push(file);
+      }
+    } catch {
+      // Ignore items that cannot be read as files.
+    }
+  }
+
+  return { files, errors };
 }

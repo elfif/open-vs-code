@@ -32,8 +32,12 @@ Two build targets, one shared protocol:
   - `src/services/pollingController.ts` — visible-only dynamic polling (pauses when webview hidden).
   - `src/services/sessionGroups.ts` — group sessions by last update: Today / Yesterday / localized date.
   - `src/services/transcript.ts` — normalize OpenCode messages into read-only transcript items.
+  - `src/services/documentStore.ts` — per-session staged document payloads, validation, move/remove/cleanup.
   - `src/sidebar/selectionContext.ts` — pure editor-selection to one-based line-range conversion (unit-tested).
-  - `src/shared/promptContent.ts` — prompt text/file/selection segments, badge labels/previews, and final prompt serialization (unit-tested).
+  - `src/shared/promptTypes.ts` — prompt segment union types shared by extension and webview.
+  - `src/shared/promptContent.ts` — badge labels/previews and prompt segment validation.
+  - `src/shared/promptDocuments.ts` — document classification, size formatting, and final prompt payload construction (unit-tested).
+  - `src/shared/uriList.ts` — URI-list parsing and supported URI filtering for Explorer drops/pastes (unit-tested).
   - `src/shared/protocol.ts` — **single source of truth** for all extension<->webview messages and shared types. Change here first.
 - **Webview** (`webview/`, React 19 + Lexical + Vite + Tailwind CSS v4 + shadcn/ui, built to `dist/webview/`):
   - `webview/src/App.tsx` — root component, reducer (open tabs, per-tab prompt drafts, connection status), `ResizeObserver` on `<main>` tracks panel height.
@@ -41,21 +45,30 @@ Two build targets, one shared protocol:
   - `webview/src/components/ui/` — shadcn primitives (generated; see `webview/components.json`).
   - `webview/src/lib/promptHeight.ts` — pure composer auto-size math (unit-tested).
   - `webview/src/lib/promptSelection.ts` — pure agent/model/variant initialization, transitions, and provider grouping (unit-tested).
+  - `webview/src/lib/dropZone.ts` — DOM-free `DataTransfer` snapshotting, drag/paste acceptance rules, and URI resolution for drops (unit-tested).
+  - `webview/src/lib/fileTransfer.ts` — browser `File` to base64 helper for staging.
   - `webview/src/lib/vscode.ts` — `acquireVsCodeApi()` wrapper and postMessage helper.
 
 ## Key behaviors (do not regress)
 
 - Command palette entry: **"Open OpenCode Panel"**; sidebar container "OpenCode" in the activity bar.
 - Session list filters by the **first VS Code workspace folder** (`location.directory`).
-- New sessions: `session.create` with **only** `location.directory`. Before each prompt, call `session.switchAgent` and `session.switchModel` with the toolbar selection (including an optional model variant), then `session.prompt` with **only** `sessionID` and trimmed `text`. Plain text only.
+- New sessions: `session.create` with **only** `location.directory`. Before each prompt, call `session.switchAgent` and `session.switchModel` with the toolbar selection (including an optional model variant), then `session.prompt` with `sessionID`, trimmed `text`, and optional `files[]` for native image/PDF attachments.
 - **OpenCode: Add to Session** is available in the file Explorer context menu (including multi-select) and editor selection context menu; `Ctrl+Alt+O` (`Cmd+Alt+O` on macOS) invokes it. With the Sessions tab active it creates a session, otherwise it inserts into the active session at the last composer caret (or the end).
 - The Explorer and editor use separate command IDs (`addFilesToSession` and `addSelectionToSession`) because VS Code passes the editor document URI to every `editor/context` command. Do not infer the invocation source from the first argument or the active editor alone.
-- File badges display only the filename but serialize as the absolute path. Selection badges display `{filename} - l{from} - {to}` (only `l{from}` for one line), preserve the exact code selected at insertion time, show a code-preview tooltip, and serialize as a `### File content` Markdown block. The extension host serializes webview `PromptSegment[]` before calling `session.prompt`.
+- File handling is unified across Explorer context menu, Explorer drag/copy, desktop drag/drop, and clipboard files. All supported files are staged in the extension host and inserted as content-backed `document` badges.
+- **VS Code blocks drag events over webviews while a drag is in progress** (`WebviewWindowDragMonitor` sets `pointer-events: none` on the webview element for every non-Shift `dragover`, from `src/vs/workbench/contrib/webview/browser/webviewWindowDragMonitor.ts`). A plain drop is therefore routed to the editor, not the panel. **Holding `Shift` while dragging is required for any drag — desktop or Explorer — to reach the webview.** This is not fixable from the extension; the composer shows a persistent "hold Shift" hint plus a **"Add files"** button (`webviewToExtension: pickFiles` -> `vscode.window.showOpenDialog`) as the friction-free path.
+- Composer drag handling listens on the **document capture phase** for `dragenter`/`dragover`/`dragleave`/`drop`/`dragend` and treats the whole composer (not just the contentEditable) as the drop zone. Accepts `Files`, `text/uri-list`, and `application/vnd.code.tree.*`; deliberately excludes bare `text/plain` so internal text-selection drags are untouched.
+- Explorer drops carry **no `dataTransfer.files`** — only `text/uri-list` (plus a private tree payload), so URI resolution must happen on `drop`, never during `dragover`. `resolveTransferUris` prefers `text/uri-list` and falls back to `text/plain`.
+- Text/source documents are injected into the prompt as fenced `### File content` blocks. Images and PDFs are sent as native OpenCode `files[]` data-URI attachments and represented in prompt text by `### Attached file` markers.
+- Supported document types are text/source files, PDF, PNG, JPEG, and WebP. Office documents, `.wasm`, `.mat`, folders, and invalid UTF-8 text are rejected with composer or VS Code warnings.
+- Document size limits: **10 MB per file** and **30 MB total per submitted prompt**.
+- Selection badges display `{filename} - l{from} - {to}` (only `l{from}` for one line), preserve the exact code selected at insertion time, show a code-preview tooltip, and serialize as a `### File content` Markdown block. The extension host serializes webview `PromptSegment[]` and staged document payloads before calling `session.prompt`.
 - Prompt toolbar selections are kept per open session tab. Agent defaults may change the model and variant; changing models resets the variant; the variant selector is hidden for models without variants.
 - Polling: session list every **10s**; active transcript every **2s** while session is actively handled (OpenCode `session.active` + short optimistic window after submit), **20s** when idle.
 - Prompt composer sizing: empty = 4 rows; grows to content + 2 empty rows; no scrollbar until 40% of panel height; then fixed with vertical scroll. Min wins if the cap is smaller than the minimum; no cap when panel height is unknown (≤0).
 - Prompt drafts (including inline context badges) are kept per open session tab in webview state.
-- Explicitly **out of scope**: tool controls, MCP selection, binary file attachments, @-mentions, skills, starting/discovering/managing the OpenCode server from the extension.
+- Explicitly **out of scope**: tool controls, MCP selection, @-mentions, skills, starting/discovering/managing the OpenCode server from the extension.
 
 ## OpenCode server
 
@@ -65,7 +78,7 @@ Two build targets, one shared protocol:
 
 ## Testing
 
-- Vitest, node environment, tests in `tests/*.test.ts` only (`vitest.config.ts`). No DOM/React component tests — logic is extracted into pure modules (`promptContent`, `selectionContext`, `promptHeight`, `sessionGroups`, `transcript`, `pollingController`) precisely so it can be tested without a DOM.
+- Vitest, node environment, tests in `tests/*.test.ts` only (`vitest.config.ts`). No DOM/React component tests — logic is extracted into pure modules (`promptContent`, `promptDocuments`, `uriList`, `selectionContext`, `promptHeight`, `sessionGroups`, `transcript`, `pollingController`, `documentStore`) precisely so it can be tested without a DOM.
 - Run: `npm test`.
 
 ## Conventions
@@ -86,4 +99,4 @@ Two build targets, one shared protocol:
 
 ## Current state (as of last session)
 
-Implemented and tested: auth flow, session list with grouping, closable in-sidebar session tabs with read-only transcripts, session creation, prompt submission, dynamic polling, prompt auto-grow, and the per-session agent/model/variant prompt toolbar. The model picker is a searchable dialog grouped by provider. Prompt submission switches the session agent and model before sending the prompt. Explorer files and exact editor selections can be inserted as inline Lexical badges with preview tooltips; the extension serializes their absolute paths and captured code into the submitted prompt.
+Implemented and tested: auth flow, session list with grouping, closable in-sidebar session tabs with read-only transcripts, session creation, prompt submission, dynamic polling, prompt auto-grow, and the per-session agent/model/variant prompt toolbar. The model picker is a searchable dialog grouped by provider. Prompt submission switches the session agent and model before sending the prompt. Explorer files, Explorer drag/copy, desktop drag/drop, clipboard files, and exact editor selections can be inserted as inline Lexical badges with preview tooltips. Supported text/source files are injected as fenced prompt content; supported images and PDFs are staged in the extension host and submitted as native OpenCode file attachments.

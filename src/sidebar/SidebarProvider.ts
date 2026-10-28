@@ -3,15 +3,17 @@ import * as vscode from "vscode";
 import {
   isPromptEmpty,
   isPromptSegment,
-  serializePrompt,
   type PromptContextSegment,
+  type PromptDocumentSegment,
   type PromptSegment,
 } from "../shared/promptContent";
+import { buildPromptPayload, MAX_DOCUMENT_BYTES, formatBytes } from "../shared/promptDocuments";
 import {
   SESSIONS_TAB_ID,
   type ExtensionToWebview,
   type LoadStatus,
   type PromptCatalog,
+  type PromptFilePayload,
   type PromptSelection,
   type SessionListItem,
   type SessionTab,
@@ -19,6 +21,11 @@ import {
   type WebviewToExtension,
 } from "../shared/protocol";
 import { CredentialStore, type StoredCredential } from "../services/credentialStore";
+import {
+  createDocumentFromBytes,
+  DocumentStore,
+  type StagedDocument,
+} from "../services/documentStore";
 import { OpenCodeApi, normalizeServerUrl, toApiError } from "../services/openCodeApi";
 import { PollingController } from "../services/pollingController";
 import { groupSessionsByUpdateDate } from "../services/sessionGroups";
@@ -28,6 +35,8 @@ const ACTIVE_TRANSCRIPT_POLL_MS = 2_000;
 const IDLE_TRANSCRIPT_POLL_MS = 20_000;
 const OPTIMISTIC_ACTIVE_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 10_000;
+const PENDING_DOCUMENT_SESSION_ID = "__pending_documents__";
+const READABLE_URI_SCHEMES = new Set(["file", "vscode-remote"]);
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "openVsCode.sidebar";
@@ -52,6 +61,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private queue: Promise<void> = Promise.resolve();
   private webviewReady = false;
   private pendingContexts: PromptContextSegment[][] = [];
+  private readonly documentStore = new DocumentStore();
 
   public constructor(
     private readonly extensionUri: vscode.Uri,
@@ -105,6 +115,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this.webviewReady = false;
       this.sessionPolling.dispose();
       this.transcriptPolling.dispose();
+      this.documentStore.clearAll();
       visibilitySubscription.dispose();
       messageSubscription.dispose();
     });
@@ -127,19 +138,74 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    let sessionID = this.activeTabID;
+    const sessionID = await this.ensureContextSession();
 
-    if (sessionID === SESSIONS_TAB_ID) {
-      const createdSessionID = await this.createSession();
+    if (!sessionID) {
+      return;
+    }
 
-      if (!createdSessionID) {
-        return;
-      }
-
-      sessionID = createdSessionID;
+    if (segments.some((segment) => segment.kind === "document")) {
+      this.documentStore.moveAll(PENDING_DOCUMENT_SESSION_ID, sessionID);
     }
 
     this.postMessage({ type: "insertContext", sessionID, segments });
+  }
+
+  public async addFiles(uris: readonly vscode.Uri[], preferredSessionID?: string): Promise<void> {
+    if (uris.length === 0) {
+      return;
+    }
+
+    await vscode.commands.executeCommand(`${SidebarProvider.viewType}.focus`);
+
+    const { documents, errors } = await this.readUris(uris);
+
+    if (errors.length > 0) {
+      void vscode.window.showWarningMessage(errors.join("\n"));
+    }
+
+    if (documents.length === 0) {
+      return;
+    }
+
+    if (!this.webviewReady) {
+      for (const document of documents) {
+        this.documentStore.add(PENDING_DOCUMENT_SESSION_ID, document);
+      }
+
+      this.pendingContexts.push(documents);
+      return;
+    }
+
+    if (!this.api) {
+      void vscode.window.showWarningMessage("Connect to an OpenCode server before adding files.");
+      return;
+    }
+
+    const target =
+      preferredSessionID &&
+      preferredSessionID !== SESSIONS_TAB_ID &&
+      this.tabs.some((tab) => tab.id === preferredSessionID)
+        ? preferredSessionID
+        : await this.ensureContextSession();
+
+    if (!target) {
+      return;
+    }
+
+    for (const document of documents) {
+      this.documentStore.add(target, document);
+    }
+
+    this.postMessage({ type: "insertContext", sessionID: target, segments: documents });
+  }
+
+  private async ensureContextSession(): Promise<string | undefined> {
+    if (this.activeTabID !== SESSIONS_TAB_ID) {
+      return this.activeTabID;
+    }
+
+    return await this.createSession();
   }
 
   private async handleMessage(message: unknown): Promise<void> {
@@ -174,7 +240,28 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       case "submitPrompt":
         await this.submitPrompt(message.sessionID, message.parts, message.selection);
         break;
+      case "stageFiles":
+        await this.handleStageFiles(message.requestID, message.sessionID, message.files);
+        break;
+      case "stageUris":
+        await this.handleStageUris(message.requestID, message.sessionID, message.uris);
+        break;
+      case "pickFiles":
+        await this.addFiles(await this.pickFileUris(), message.sessionID);
+        break;
     }
+  }
+
+  private async pickFileUris(): Promise<vscode.Uri[]> {
+    const selected = await vscode.window.showOpenDialog({
+      title: "Add files to this OpenCode session",
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: true,
+      openLabel: "Add to OpenCode",
+    });
+
+    return selected ?? [];
   }
 
   private async initialize(): Promise<void> {
@@ -276,6 +363,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     const index = this.tabs.findIndex((candidate) => candidate.id === tabID);
     this.tabs = this.tabs.filter((candidate) => candidate.id !== tabID);
+    this.documentStore.clearSession(tabID);
 
     if (this.activeTabID === tabID) {
       const fallback = this.tabs[Math.max(0, index - 1)] ?? sessionsTab();
@@ -351,6 +439,159 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private async handleStageFiles(
+    requestID: string,
+    sessionID: string,
+    files: readonly PromptFilePayload[],
+  ): Promise<void> {
+    if (sessionID === SESSIONS_TAB_ID || !this.tabs.some((tab) => tab.id === sessionID)) {
+      this.postMessage({
+        type: "documentError",
+        requestID,
+        sessionID,
+        error: "That session is no longer open.",
+      });
+      return;
+    }
+
+    const segments: PromptDocumentSegment[] = [];
+    const errors: string[] = [];
+
+    for (const file of files) {
+      try {
+        const document = createDocumentFromBytes({
+          name: file.name,
+          mime: file.mime,
+          base64: file.base64,
+        });
+        this.documentStore.add(sessionID, document);
+        segments.push(document);
+      } catch (error) {
+        errors.push(errorMessage(error));
+      }
+    }
+
+    if (segments.length > 0) {
+      this.postMessage({ type: "documentsStaged", requestID, sessionID, segments });
+    }
+
+    if (errors.length > 0) {
+      this.postMessage({ type: "documentError", requestID, sessionID, error: errors.join("\n") });
+    }
+
+    if (segments.length === 0 && errors.length === 0) {
+      this.postMessage({
+        type: "documentError",
+        requestID,
+        sessionID,
+        error: "No files were added.",
+      });
+    }
+  }
+
+  private async handleStageUris(
+    requestID: string,
+    sessionID: string,
+    uris: readonly string[],
+  ): Promise<void> {
+    if (sessionID === SESSIONS_TAB_ID || !this.tabs.some((tab) => tab.id === sessionID)) {
+      this.postMessage({
+        type: "documentError",
+        requestID,
+        sessionID,
+        error: "That session is no longer open.",
+      });
+      return;
+    }
+
+    const parsed: vscode.Uri[] = [];
+    const errors: string[] = [];
+
+    for (const rawUri of uris) {
+      try {
+        const uri = vscode.Uri.parse(rawUri);
+
+        if (!READABLE_URI_SCHEMES.has(uri.scheme)) {
+          throw new Error(`${rawUri} is not a readable file URI.`);
+        }
+
+        parsed.push(uri);
+      } catch (error) {
+        errors.push(errorMessage(error));
+      }
+    }
+
+    const result = await this.readUris(parsed);
+    const documents = [...result.documents];
+    const allErrors = [...errors, ...result.errors];
+
+    if (documents.length > 0) {
+      for (const document of documents) {
+        this.documentStore.add(sessionID, document);
+      }
+
+      this.postMessage({ type: "documentsStaged", requestID, sessionID, segments: documents });
+    }
+
+    if (allErrors.length > 0) {
+      this.postMessage({
+        type: "documentError",
+        requestID,
+        sessionID,
+        error: allErrors.join("\n"),
+      });
+    }
+
+    if (documents.length === 0 && allErrors.length === 0) {
+      this.postMessage({
+        type: "documentError",
+        requestID,
+        sessionID,
+        error: "No files were added.",
+      });
+    }
+  }
+
+  private async readUris(
+    uris: readonly vscode.Uri[],
+  ): Promise<{ documents: StagedDocument[]; errors: string[] }> {
+    const documents: StagedDocument[] = [];
+    const errors: string[] = [];
+
+    for (const uri of uris) {
+      try {
+        if (!READABLE_URI_SCHEMES.has(uri.scheme)) {
+          throw new Error(`${uri.toString()} is not a readable file URI.`);
+        }
+
+        const stat = await vscode.workspace.fs.stat(uri);
+
+        if (stat.type !== vscode.FileType.File) {
+          throw new Error(`${basename(uri)} is a folder.`);
+        }
+
+        if (stat.size > MAX_DOCUMENT_BYTES) {
+          throw new Error(
+            `${basename(uri)} exceeds the ${formatBytes(MAX_DOCUMENT_BYTES)} file size limit.`,
+          );
+        }
+
+        const bytes = await vscode.workspace.fs.readFile(uri);
+        documents.push(
+          createDocumentFromBytes({
+            name: basename(uri),
+            base64: Buffer.from(bytes).toString("base64"),
+            path: displayPath(uri),
+          }),
+        );
+      } catch (error) {
+        errors.push(errorMessage(error));
+      }
+    }
+
+    return { documents, errors };
+  }
+
   private async submitPrompt(
     sessionID: string,
     parts: readonly PromptSegment[],
@@ -360,11 +601,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    const text = serializePrompt(parts);
-
     if (isPromptEmpty(parts)) {
       return;
     }
+
+    const build = buildPromptPayload(parts, this.documentStore.getSessionMap(sessionID));
+
+    if (!build.ok) {
+      this.postMessage({ type: "promptStatus", sessionID, status: "error", error: build.error });
+      return;
+    }
+
+    const { text, files } = build.payload;
 
     this.promptSubmitting.add(sessionID);
     this.setOptimisticallyActive(sessionID);
@@ -376,9 +624,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           return;
         }
 
-        await this.api.prompt(sessionID, text, selection, AbortSignal.timeout(REQUEST_TIMEOUT_MS));
+        await this.api.prompt(
+          sessionID,
+          text,
+          files,
+          selection,
+          AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        );
         this.setOptimisticallyActive(sessionID);
         this.postMessage({ type: "promptStatus", sessionID, status: "accepted" });
+        this.documentStore.remove(sessionID, build.referencedDocumentIDs);
 
         if (this.activeTabID === sessionID) {
           await this.refreshTranscript();
@@ -589,6 +844,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     this.activeSessionIds.clear();
     this.activePromptSessionID = null;
     this.promptSubmitting.clear();
+    this.documentStore.clearAll();
+    this.pendingContexts = [];
     this.clearTranscript();
     this.sendTabs();
     this.postMessage({ type: "sessions", status: "idle", groups: [] });
@@ -785,12 +1042,68 @@ function isWebviewMessage(value: unknown): value is WebviewToExtension {
         value.parts.every(isPromptSegment) &&
         isPromptSelection(value.selection)
       );
+    case "stageFiles":
+      return (
+        "requestID" in value &&
+        "sessionID" in value &&
+        "files" in value &&
+        typeof value.requestID === "string" &&
+        typeof value.sessionID === "string" &&
+        Array.isArray(value.files) &&
+        value.files.every(isPromptFilePayload)
+      );
+    case "stageUris":
+      return (
+        "requestID" in value &&
+        "sessionID" in value &&
+        "uris" in value &&
+        typeof value.requestID === "string" &&
+        typeof value.sessionID === "string" &&
+        Array.isArray(value.uris) &&
+        value.uris.every((uri) => typeof uri === "string")
+      );
+    case "pickFiles":
+      return "sessionID" in value && typeof value.sessionID === "string";
     case "activateTab":
     case "closeTab":
       return "tabID" in value && typeof value.tabID === "string";
     default:
       return false;
   }
+}
+
+function isPromptFilePayload(value: unknown): value is PromptFilePayload {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "name" in value &&
+    "base64" in value &&
+    "size" in value &&
+    typeof value.name === "string" &&
+    typeof value.base64 === "string" &&
+    typeof value.size === "number" &&
+    (!("mime" in value) || typeof value.mime === "string")
+  );
+}
+
+function basename(uri: vscode.Uri): string {
+  return uri.path.split("/").pop() || uri.fsPath.split(/[\\/]/).pop() || uri.toString();
+}
+
+function displayPath(uri: vscode.Uri): string {
+  if (uri.scheme === "file") {
+    return vscode.workspace.asRelativePath(uri, false);
+  }
+
+  return uri.toString();
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+
+  return String(error);
 }
 
 function isPromptSelection(value: unknown): value is PromptSelection {

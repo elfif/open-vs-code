@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 
 import { getSelectedLineRange } from "./sidebar/selectionContext";
 import { SidebarProvider } from "./sidebar/SidebarProvider";
-import type { PromptContextSegment } from "./shared/promptContent";
+import type { PromptSelectionSegment } from "./shared/promptContent";
 
 export function activate(context: vscode.ExtensionContext): void {
   const provider = new SidebarProvider(context.extensionUri, context.secrets);
@@ -19,14 +19,14 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(
       "openVsCode.addFilesToSession",
       async (resource?: unknown, resources?: unknown) => {
-        const segments = await resolveFileSegments(resource, resources);
+        const uris = await resolveFileUris(resource, resources);
 
-        if (segments.length === 0) {
+        if (uris.length === 0) {
           void vscode.window.showWarningMessage("Select a file to add to OpenCode.");
           return;
         }
 
-        await provider.addContext(segments);
+        await provider.addFiles(uris);
       },
     ),
     vscode.commands.registerCommand("openVsCode.addSelectionToSession", async () => {
@@ -44,20 +44,15 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 }
 
-async function resolveFileSegments(
-  resource: unknown,
-  resources: unknown,
-): Promise<PromptContextSegment[]> {
+async function resolveFileUris(resource: unknown, resources: unknown): Promise<vscode.Uri[]> {
   const selectedResources = Array.isArray(resources) ? resources : [];
   const targetResources = selectedResources.length > 0 ? selectedResources : [resource];
-  const fileSegments = targetResources
-    .filter(isFileUri)
-    .map((uri): PromptContextSegment => ({ kind: "file", path: uri.fsPath }));
+  const fileUris = targetResources.filter(isFileUri);
 
-  return fileSegments.length > 0 ? fileSegments : readExplorerPathsFromClipboard();
+  return fileUris.length > 0 ? fileUris : await readExplorerPathsFromClipboard();
 }
 
-function resolveSelectionSegments(): PromptContextSegment[] {
+function resolveSelectionSegments(): PromptSelectionSegment[] {
   const editor = vscode.window.activeTextEditor;
 
   if (!editor || editor.document.uri.scheme !== "file") {
@@ -66,7 +61,7 @@ function resolveSelectionSegments(): PromptContextSegment[] {
 
   return editor.selections
     .filter((selection) => !selection.isEmpty)
-    .map((selection) => ({
+    .map((selection): PromptSelectionSegment => ({
       kind: "selection",
       path: editor.document.uri.fsPath,
       ...getSelectedLineRange(selection.start, selection.end),
@@ -79,7 +74,7 @@ function isFileUri(value: unknown): value is vscode.Uri {
   return value instanceof vscode.Uri && value.scheme === "file";
 }
 
-async function readExplorerPathsFromClipboard(): Promise<PromptContextSegment[]> {
+async function readExplorerPathsFromClipboard(): Promise<vscode.Uri[]> {
   const previousClipboard = await vscode.env.clipboard.readText();
 
   try {
@@ -89,7 +84,7 @@ async function readExplorerPathsFromClipboard(): Promise<PromptContextSegment[]>
     return copiedPaths
       .split(/\r?\n/)
       .filter((path) => path.length > 0)
-      .map((path): PromptContextSegment => ({ kind: "file", path }));
+      .map((path) => vscode.Uri.file(path));
   } catch {
     return [];
   } finally {

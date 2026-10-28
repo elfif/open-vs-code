@@ -8,6 +8,7 @@ import {
   type SessionMessageInfo,
 } from "@opencode/client";
 
+import type { PromptFileAttachmentInput } from "../shared/promptDocuments";
 import type {
   PromptCatalog,
   PromptModel,
@@ -206,6 +207,7 @@ export class OpenCodeApi {
   public async prompt(
     sessionID: string,
     text: string,
+    files: readonly PromptFileAttachmentInput[],
     selection: PromptSelection,
     signal?: AbortSignal,
   ): Promise<void> {
@@ -215,6 +217,7 @@ export class OpenCodeApi {
       {
         sessionID,
         text,
+        ...(files.length > 0 ? { files } : {}),
       },
       { signal },
     );

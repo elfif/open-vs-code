@@ -1,4 +1,4 @@
-import type { PromptContextSegment, PromptSegment } from "./promptContent";
+import type { PromptContextSegment, PromptDocumentSegment, PromptSegment } from "./promptContent";
 
 export const SESSIONS_TAB_ID = "sessions";
 
@@ -21,6 +21,13 @@ export interface PromptModel {
 export interface PromptSelection {
   readonly agent: string;
   readonly model: PromptModel;
+}
+
+export interface PromptFilePayload {
+  readonly name: string;
+  readonly mime?: string;
+  readonly base64: string;
+  readonly size: number;
 }
 
 export interface AgentOption {
@@ -114,7 +121,20 @@ export type WebviewToExtension =
       readonly sessionID: string;
       readonly parts: readonly PromptSegment[];
       readonly selection: PromptSelection;
-    };
+    }
+  | {
+      readonly type: "stageFiles";
+      readonly requestID: string;
+      readonly sessionID: string;
+      readonly files: readonly PromptFilePayload[];
+    }
+  | {
+      readonly type: "stageUris";
+      readonly requestID: string;
+      readonly sessionID: string;
+      readonly uris: readonly string[];
+    }
+  | { readonly type: "pickFiles"; readonly sessionID: string };
 
 export type ExtensionToWebview =
   | {
@@ -165,4 +185,16 @@ export type ExtensionToWebview =
       readonly type: "insertContext";
       readonly sessionID: string;
       readonly segments: readonly PromptContextSegment[];
+    }
+  | {
+      readonly type: "documentsStaged";
+      readonly requestID: string;
+      readonly sessionID: string;
+      readonly segments: readonly PromptDocumentSegment[];
+    }
+  | {
+      readonly type: "documentError";
+      readonly requestID: string;
+      readonly sessionID: string;
+      readonly error: string;
     };

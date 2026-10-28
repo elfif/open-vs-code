@@ -12,7 +12,10 @@ import {
   createPromptSelection,
   reconcilePromptSelection,
 } from "@/lib/promptSelection";
+import { fileToBase64 } from "@/lib/fileTransfer";
 import { onExtensionMessage, postToExtension } from "@/lib/vscode";
+import { classifyDocument, formatBytes, MAX_DOCUMENT_BYTES } from "@shared/promptDocuments";
+import { extractSupportedUris } from "@shared/uriList";
 import type { PromptSegment } from "@shared/promptContent";
 import {
   SESSIONS_TAB_ID,
@@ -21,6 +24,7 @@ import {
   type LoadStatus,
   type ModelOption,
   type PromptCatalog,
+  type PromptFilePayload,
   type PromptSelection,
   type SessionGroup,
   type SessionTab,
@@ -54,6 +58,8 @@ interface PanelState {
   readonly promptStatusBySession: Readonly<
     Record<string, { readonly status: "submitting" | "error"; readonly error?: string }>
   >;
+  readonly stagingRequestIDsBySession: Readonly<Record<string, readonly string[]>>;
+  readonly documentErrorBySession: Readonly<Record<string, string>>;
 }
 
 const initialState: PanelState = {
@@ -75,12 +81,15 @@ const initialState: PanelState = {
   promptCatalog: null,
   selectionsBySession: {},
   promptStatusBySession: {},
+  stagingRequestIDsBySession: {},
+  documentErrorBySession: {},
 };
 
 const EMPTY_PROMPT: readonly PromptSegment[] = [];
 const EMPTY_INSERTS: readonly PendingContextInsert[] = [];
 
 let nextContextInsertID = 1;
+let nextDocumentRequestID = 1;
 
 type PanelAction =
   | ExtensionToWebview
@@ -102,7 +111,18 @@ type PanelAction =
       readonly sessionID: string;
       readonly variant: string | undefined;
     }
-  | { readonly type: "clearSession"; readonly sessionID: string };
+  | { readonly type: "clearSession"; readonly sessionID: string }
+  | {
+      readonly type: "documentStagingStarted";
+      readonly sessionID: string;
+      readonly requestID: string;
+    }
+  | {
+      readonly type: "documentStagingFinished";
+      readonly sessionID: string;
+      readonly requestID: string;
+    }
+  | { readonly type: "setDocumentError"; readonly sessionID: string; readonly error: string };
 
 function reducer(state: PanelState, action: PanelAction): PanelState {
   switch (action.type) {
@@ -168,9 +188,11 @@ function reducer(state: PanelState, action: PanelAction): PanelState {
     case "promptStatus": {
       if (action.status === "accepted") {
         const nextDrafts = { ...state.draftsBySession };
-        delete nextDrafts[action.sessionID];
         const nextPromptStatus = { ...state.promptStatusBySession };
+        const nextDocumentErrors = { ...state.documentErrorBySession };
+        delete nextDrafts[action.sessionID];
         delete nextPromptStatus[action.sessionID];
+        delete nextDocumentErrors[action.sessionID];
 
         return {
           ...state,
@@ -180,6 +202,7 @@ function reducer(state: PanelState, action: PanelAction): PanelState {
             [action.sessionID]: (state.draftVersionsBySession[action.sessionID] ?? 0) + 1,
           },
           promptStatusBySession: nextPromptStatus,
+          documentErrorBySession: nextDocumentErrors,
         };
       }
 
@@ -203,6 +226,72 @@ function reducer(state: PanelState, action: PanelAction): PanelState {
             ...(state.pendingInsertsBySession[action.sessionID] ?? []),
             { id: nextContextInsertID++, segments: action.segments },
           ],
+        },
+      };
+    case "documentsStaged": {
+      const nextStaging = removeStagingRequest(
+        state.stagingRequestIDsBySession,
+        action.sessionID,
+        action.requestID,
+      );
+      const nextDocumentErrors = { ...state.documentErrorBySession };
+      delete nextDocumentErrors[action.sessionID];
+
+      return {
+        ...state,
+        stagingRequestIDsBySession: nextStaging,
+        documentErrorBySession: nextDocumentErrors,
+        pendingInsertsBySession: {
+          ...state.pendingInsertsBySession,
+          [action.sessionID]: [
+            ...(state.pendingInsertsBySession[action.sessionID] ?? []),
+            { id: nextContextInsertID++, segments: action.segments },
+          ],
+        },
+      };
+    }
+    case "documentError": {
+      const nextStaging = removeStagingRequest(
+        state.stagingRequestIDsBySession,
+        action.sessionID,
+        action.requestID,
+      );
+
+      return {
+        ...state,
+        stagingRequestIDsBySession: nextStaging,
+        documentErrorBySession: {
+          ...state.documentErrorBySession,
+          [action.sessionID]: action.error,
+        },
+      };
+    }
+    case "documentStagingStarted":
+      return {
+        ...state,
+        stagingRequestIDsBySession: {
+          ...state.stagingRequestIDsBySession,
+          [action.sessionID]: [
+            ...(state.stagingRequestIDsBySession[action.sessionID] ?? []),
+            action.requestID,
+          ],
+        },
+      };
+    case "documentStagingFinished":
+      return {
+        ...state,
+        stagingRequestIDsBySession: removeStagingRequest(
+          state.stagingRequestIDsBySession,
+          action.sessionID,
+          action.requestID,
+        ),
+      };
+    case "setDocumentError":
+      return {
+        ...state,
+        documentErrorBySession: {
+          ...state.documentErrorBySession,
+          [action.sessionID]: action.error,
         },
       };
     case "updateDraft":
@@ -275,10 +364,14 @@ function reducer(state: PanelState, action: PanelAction): PanelState {
       const nextDraftVersions = { ...state.draftVersionsBySession };
       const nextPendingInserts = { ...state.pendingInsertsBySession };
       const nextSelections = { ...state.selectionsBySession };
+      const nextStaging = { ...state.stagingRequestIDsBySession };
+      const nextDocumentErrors = { ...state.documentErrorBySession };
       delete nextDrafts[action.sessionID];
       delete nextDraftVersions[action.sessionID];
       delete nextPendingInserts[action.sessionID];
       delete nextSelections[action.sessionID];
+      delete nextStaging[action.sessionID];
+      delete nextDocumentErrors[action.sessionID];
 
       return {
         ...state,
@@ -286,6 +379,8 @@ function reducer(state: PanelState, action: PanelAction): PanelState {
         draftVersionsBySession: nextDraftVersions,
         pendingInsertsBySession: nextPendingInserts,
         selectionsBySession: nextSelections,
+        stagingRequestIDsBySession: nextStaging,
+        documentErrorBySession: nextDocumentErrors,
       };
     }
   }
@@ -301,6 +396,29 @@ function reconcileSelections(
       return reconciled ? [[sessionID, reconciled]] : [];
     }),
   );
+}
+
+function removeStagingRequest(
+  staging: Readonly<Record<string, readonly string[]>>,
+  sessionID: string,
+  requestID: string,
+): Readonly<Record<string, readonly string[]>> {
+  const current = staging[sessionID];
+
+  if (!current) {
+    return staging;
+  }
+
+  const next = current.filter((id) => id !== requestID);
+  const nextStaging = { ...staging };
+
+  if (next.length === 0) {
+    delete nextStaging[sessionID];
+  } else {
+    nextStaging[sessionID] = next;
+  }
+
+  return nextStaging;
 }
 
 function initializeSelections(state: PanelState): Readonly<Record<string, PromptSelection>> {
@@ -384,6 +502,108 @@ export default function App() {
   const activeSelection = activeSessionTab
     ? (state.selectionsBySession[state.activeTabID] ?? null)
     : null;
+  const activeStaging = activeSessionTab
+    ? (state.stagingRequestIDsBySession[state.activeTabID]?.length ?? 0) > 0
+    : false;
+  const activeDocumentError = activeSessionTab
+    ? state.documentErrorBySession[state.activeTabID]
+    : undefined;
+
+  const handleDocumentFiles = (files: readonly File[]) => {
+    const validFiles: File[] = [];
+    const errors: string[] = [];
+
+    for (const file of files) {
+      const name = file.name || "file";
+
+      if (file.size > MAX_DOCUMENT_BYTES) {
+        errors.push(`${name} exceeds the ${formatBytes(MAX_DOCUMENT_BYTES)} file size limit.`);
+        continue;
+      }
+
+      const kind = classifyDocument(name, file.type);
+
+      if (kind === "unsupported") {
+        errors.push(`${name} is not supported. Use text, PDF, PNG, JPEG, or WebP.`);
+        continue;
+      }
+
+      if (kind !== "text" && file.size === 0) {
+        errors.push(`${name} is empty.`);
+        continue;
+      }
+
+      validFiles.push(file);
+    }
+
+    if (errors.length > 0) {
+      dispatch({
+        type: "setDocumentError",
+        sessionID: state.activeTabID,
+        error: errors.join("\n"),
+      });
+    }
+
+    if (validFiles.length > 0) {
+      const requestID = `file-${nextDocumentRequestID++}`;
+      dispatch({ type: "documentStagingStarted", sessionID: state.activeTabID, requestID });
+      void stageFiles(requestID, validFiles);
+    }
+  };
+
+  const handleDocumentUris = (uris: readonly string[]) => {
+    const { supported, unsupported } = extractSupportedUris(uris.join("\n"));
+
+    if (unsupported.length > 0) {
+      dispatch({
+        type: "setDocumentError",
+        sessionID: state.activeTabID,
+        error: `${unsupported.join("\n")} is not a readable file URI.`,
+      });
+    }
+
+    if (supported.length > 0) {
+      const requestID = `uri-${nextDocumentRequestID++}`;
+      dispatch({ type: "documentStagingStarted", sessionID: state.activeTabID, requestID });
+      postToExtension({
+        type: "stageUris",
+        requestID,
+        sessionID: state.activeTabID,
+        uris: supported,
+      });
+    }
+  };
+
+  const handleDocumentError = (error: string) => {
+    dispatch({ type: "setDocumentError", sessionID: state.activeTabID, error });
+  };
+
+  const stageFiles = async (requestID: string, files: readonly File[]) => {
+    try {
+      const payloads: PromptFilePayload[] = await Promise.all(
+        files.map(async (file) => ({
+          name: file.name || "file",
+          ...(file.type ? { mime: file.type } : {}),
+          size: file.size,
+          base64: await fileToBase64(file),
+        })),
+      );
+
+      postToExtension({
+        type: "stageFiles",
+        requestID,
+        sessionID: state.activeTabID,
+        files: payloads,
+      });
+    } catch (error) {
+      dispatch({ type: "documentStagingFinished", sessionID: state.activeTabID, requestID });
+      dispatch({
+        type: "setDocumentError",
+        sessionID: state.activeTabID,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
 
   return (
     <main ref={panelRef} className="flex h-full min-h-0 flex-col bg-background text-foreground">
@@ -427,7 +647,9 @@ export default function App() {
                 value={state.draftsBySession[state.activeTabID] ?? EMPTY_PROMPT}
                 pendingInserts={state.pendingInsertsBySession[state.activeTabID] ?? EMPTY_INSERTS}
                 submitting={activePromptStatus?.status === "submitting"}
+                staging={activeStaging}
                 error={activePromptStatus?.error}
+                documentError={activeDocumentError}
                 disabled={state.connectionStatus !== "connected"}
                 panelHeight={panelHeight}
                 catalog={state.promptCatalog}
@@ -450,7 +672,7 @@ export default function App() {
                   dispatch({ type: "selectVariant", sessionID: state.activeTabID, variant })
                 }
                 onSubmit={() => {
-                  if (!activeSelection) {
+                  if (!activeSelection || activeStaging) {
                     return;
                   }
 
@@ -461,6 +683,12 @@ export default function App() {
                     selection: activeSelection,
                   });
                 }}
+                onPickFiles={() =>
+                  postToExtension({ type: "pickFiles", sessionID: state.activeTabID })
+                }
+                onFiles={handleDocumentFiles}
+                onUris={handleDocumentUris}
+                onDocumentError={handleDocumentError}
               />
             </>
           ) : (

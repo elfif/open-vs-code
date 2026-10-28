@@ -100,7 +100,7 @@ describe("OpenCodeApi mutations", () => {
 
     const { OpenCodeApi } = await import("../src/services/openCodeApi");
     const api = new OpenCodeApi({ serverUrl: "http://localhost:4096", password: "secret" }, client);
-    await api.prompt("ses_1", "hello", {
+    await api.prompt("ses_1", "hello", [{ uri: "data:text/plain;base64,aGk=", name: "note.txt" }], {
       agent: "build",
       model: { providerID: "openai", id: "gpt-5", variant: "high" },
     });
@@ -114,7 +114,14 @@ describe("OpenCodeApi mutations", () => {
           model: { providerID: "openai", id: "gpt-5", variant: "high" },
         },
       ],
-      ["prompt", { sessionID: "ses_1", text: "hello" }],
+      [
+        "prompt",
+        {
+          sessionID: "ses_1",
+          text: "hello",
+          files: [{ uri: "data:text/plain;base64,aGk=", name: "note.txt" }],
+        },
+      ],
     ]);
   });
 

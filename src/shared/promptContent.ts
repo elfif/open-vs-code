@@ -1,25 +1,27 @@
-export type PromptSegment =
-  | { readonly kind: "text"; readonly text: string }
-  | { readonly kind: "file"; readonly path: string }
-  | {
-      readonly kind: "selection";
-      readonly path: string;
-      readonly startLine: number;
-      readonly endLine: number;
-      readonly code: string;
-      readonly languageId: string;
-    };
+import { formatBytes } from "./promptDocuments";
+import type {
+  PromptContextSegment,
+  PromptSegment,
+  PromptSelectionSegment,
+  PromptTextSegment,
+} from "./promptTypes";
 
-export type PromptContextSegment = Exclude<PromptSegment, { readonly kind: "text" }>;
+export type {
+  PromptContextSegment,
+  PromptDocumentSegment,
+  PromptSegment,
+  PromptSelectionSegment,
+  PromptTextSegment,
+} from "./promptTypes";
 
 const PREVIEW_LINE_LIMIT = 12;
 
 export function formatBadgeLabel(segment: PromptContextSegment): string {
-  const filename = segment.path.split(/[\\/]/).pop() || segment.path;
-
-  if (segment.kind === "file") {
-    return filename;
+  if (segment.kind === "document") {
+    return `${segment.name} (${formatBytes(segment.size)})`;
   }
+
+  const filename = segment.path.split(/[\\/]/).pop() || segment.path;
 
   return segment.startLine === segment.endLine
     ? `${filename} - l${segment.startLine}`
@@ -27,8 +29,8 @@ export function formatBadgeLabel(segment: PromptContextSegment): string {
 }
 
 export function formatBadgePreview(segment: PromptContextSegment): string {
-  if (segment.kind === "file") {
-    return segment.path;
+  if (segment.kind === "document") {
+    return `${segment.path || segment.name}\n${segment.mime} • ${formatBytes(segment.size)}`;
   }
 
   const lines = segment.code.split("\n");
@@ -36,42 +38,12 @@ export function formatBadgePreview(segment: PromptContextSegment): string {
   const remainingLines = Math.max(0, lines.length - PREVIEW_LINE_LIMIT);
   const range =
     segment.startLine === segment.endLine
-      ? `line ${segment.startLine}`
-      : `lines ${segment.startLine} - ${segment.endLine}`;
+      ? `line: ${segment.startLine}`
+      : `lines: ${segment.startLine} - ${segment.endLine}`;
 
   return `${segment.path} (${range})\n${visibleCode}${
     remainingLines > 0 ? `\n… (+${remainingLines} more lines)` : ""
   }`;
-}
-
-export function serializePrompt(segments: readonly PromptSegment[]): string {
-  let output = "";
-  let previousWasBlock = false;
-
-  for (const segment of segments) {
-    if (segment.kind === "text" && segment.text.length === 0) {
-      continue;
-    }
-
-    const content =
-      segment.kind === "selection"
-        ? formatSelection(segment)
-        : segment.kind === "file"
-          ? segment.path
-          : segment.text;
-    const isBlock = segment.kind === "selection";
-
-    if (output.length > 0 && content.length > 0 && (isBlock || previousWasBlock)) {
-      const trailingNewlines = output.match(/\n*$/)?.[0].length ?? 0;
-      const leadingNewlines = content.match(/^\n*/)?.[0].length ?? 0;
-      output += "\n".repeat(Math.max(0, 2 - trailingNewlines - leadingNewlines));
-    }
-
-    output += content;
-    previousWasBlock = isBlock;
-  }
-
-  return output.trim();
 }
 
 export function isPromptEmpty(segments: readonly PromptSegment[]): boolean {
@@ -86,8 +58,18 @@ export function isPromptSegment(value: unknown): value is PromptSegment {
   switch (value.kind) {
     case "text":
       return "text" in value && typeof value.text === "string";
-    case "file":
-      return "path" in value && typeof value.path === "string";
+    case "document":
+      return (
+        "id" in value &&
+        "name" in value &&
+        "mime" in value &&
+        "size" in value &&
+        typeof value.id === "string" &&
+        typeof value.name === "string" &&
+        typeof value.mime === "string" &&
+        typeof value.size === "number" &&
+        (!("path" in value) || typeof value.path === "string")
+      );
     case "selection":
       return (
         "path" in value &&
@@ -110,17 +92,10 @@ export function isPromptSegment(value: unknown): value is PromptSegment {
   }
 }
 
-function formatSelection(segment: Extract<PromptSegment, { readonly kind: "selection" }>): string {
-  const range =
-    segment.startLine === segment.endLine
-      ? `${segment.startLine}`
-      : `${segment.startLine} - ${segment.endLine}`;
-  const longestBacktickRun = (segment.code.match(/`+/g) ?? []).reduce(
-    (longest, run) => Math.max(longest, run.length),
-    0,
-  );
-  const fence = "`".repeat(Math.max(3, longestBacktickRun + 1));
-  const codeEnding = segment.code.endsWith("\n") ? "" : "\n";
+export function isPromptSelectionSegment(value: unknown): value is PromptSelectionSegment {
+  return isPromptSegment(value) && value.kind === "selection";
+}
 
-  return `### File content\nfile: ${segment.path} (lines: ${range})\nselected content:\n${fence}${segment.languageId}\n${segment.code}${codeEnding}${fence}`;
+export function isPromptTextSegment(value: unknown): value is PromptTextSegment {
+  return isPromptSegment(value) && value.kind === "text";
 }
