@@ -48,10 +48,16 @@ export interface ProviderOption {
   readonly name: string;
 }
 
+export interface SkillOption {
+  readonly id: string;
+  readonly name: string;
+}
+
 export interface PromptCatalog {
   readonly agents: readonly AgentOption[];
   readonly models: readonly ModelOption[];
   readonly providers: readonly ProviderOption[];
+  readonly skills: readonly SkillOption[];
   readonly defaultModel: PromptModel | null;
 }
 

@@ -8,7 +8,10 @@ import {
   type SessionMessageInfo,
 } from "@opencode/client";
 
-import type { PromptFileAttachmentInput } from "../shared/promptDocuments";
+import type {
+  PromptFileAttachmentInput,
+  PromptSkillAttachmentInput,
+} from "../shared/promptDocuments";
 import type {
   PromptCatalog,
   PromptModel,
@@ -167,10 +170,11 @@ export class OpenCodeApi {
   }
 
   public async getPromptCatalog(directory: string, signal?: AbortSignal): Promise<PromptCatalog> {
-    const [agents, models, providers, defaultModel] = await Promise.all([
+    const [agents, models, providers, skills, defaultModel] = await Promise.all([
       this.client.agent.list({ location: { directory } }, { signal }),
       this.client.model.list({ location: { directory } }, { signal }),
       this.client.provider.list({ location: { directory } }, { signal }),
+      this.client.skill.list({ location: { directory } }, { signal }),
       this.client.model
         .default({ location: { directory } }, { signal })
         .catch(() => ({ data: null })),
@@ -200,6 +204,7 @@ export class OpenCodeApi {
       providers: providers.data
         .filter((provider) => provider.activation !== "disabled")
         .map((provider) => ({ id: provider.id, name: provider.name })),
+      skills: skills.data.map((skill) => ({ id: skill.id, name: skill.name })),
       defaultModel: defaultModel.data ? toPromptModel(defaultModel.data) : null,
     };
   }
@@ -208,6 +213,7 @@ export class OpenCodeApi {
     sessionID: string,
     text: string,
     files: readonly PromptFileAttachmentInput[],
+    skills: readonly PromptSkillAttachmentInput[],
     selection: PromptSelection,
     signal?: AbortSignal,
   ): Promise<void> {
@@ -218,6 +224,7 @@ export class OpenCodeApi {
         sessionID,
         text,
         ...(files.length > 0 ? { files } : {}),
+        ...(skills.length > 0 ? { skills } : {}),
       },
       { signal },
     );

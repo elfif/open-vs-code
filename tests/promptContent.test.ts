@@ -26,6 +26,12 @@ const document: PromptContextSegment = {
   path: "docs/notes.md",
 };
 
+const skill: PromptContextSegment = {
+  kind: "skill",
+  id: "git-release",
+  name: "Git Release",
+};
+
 describe("formatBadgeLabel", () => {
   it("shows filename and size for documents", () => {
     expect(formatBadgeLabel(document)).toBe("notes.md (2.0 KB)");
@@ -35,11 +41,19 @@ describe("formatBadgeLabel", () => {
     expect(formatBadgeLabel({ ...selection, endLine: 12 })).toBe("App.tsx - l12");
     expect(formatBadgeLabel(selection)).toBe("App.tsx - l12 - 14");
   });
+
+  it("shows the skill id with a slash", () => {
+    expect(formatBadgeLabel(skill)).toBe("/git-release");
+  });
 });
 
 describe("formatBadgePreview", () => {
   it("shows document path, mime, and size", () => {
     expect(formatBadgePreview(document)).toBe("docs/notes.md\ntext/markdown • 2.0 KB");
+  });
+
+  it("shows the skill name and id", () => {
+    expect(formatBadgePreview(skill)).toBe("Skill: Git Release\nID: git-release");
   });
 
   it("shows captured code and truncates it after twelve lines", () => {
@@ -57,6 +71,7 @@ describe("isPromptEmpty", () => {
   it("accepts badges without additional text", () => {
     expect(isPromptEmpty([document])).toBe(false);
     expect(isPromptEmpty([selection])).toBe(false);
+    expect(isPromptEmpty([skill])).toBe(false);
   });
 
   it("rejects empty and whitespace-only text", () => {
@@ -70,6 +85,7 @@ describe("isPromptSegment", () => {
     expect(isPromptSegment({ kind: "text", text: "hello" })).toBe(true);
     expect(isPromptSegment(document)).toBe(true);
     expect(isPromptSegment(selection)).toBe(true);
+    expect(isPromptSegment(skill)).toBe(true);
   });
 
   it("rejects malformed segments", () => {
@@ -77,6 +93,7 @@ describe("isPromptSegment", () => {
     expect(isPromptSegment({ kind: "document" })).toBe(false);
     expect(isPromptSegment({ ...selection, startLine: 0 })).toBe(false);
     expect(isPromptSegment({ ...selection, startLine: 15 })).toBe(false);
+    expect(isPromptSegment({ kind: "skill", id: "", name: "Missing id" })).toBe(false);
     expect(isPromptSegment({ kind: "unknown" })).toBe(false);
   });
 });

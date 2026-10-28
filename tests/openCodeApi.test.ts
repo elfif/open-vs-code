@@ -100,10 +100,16 @@ describe("OpenCodeApi mutations", () => {
 
     const { OpenCodeApi } = await import("../src/services/openCodeApi");
     const api = new OpenCodeApi({ serverUrl: "http://localhost:4096", password: "secret" }, client);
-    await api.prompt("ses_1", "hello", [{ uri: "data:text/plain;base64,aGk=", name: "note.txt" }], {
-      agent: "build",
-      model: { providerID: "openai", id: "gpt-5", variant: "high" },
-    });
+    await api.prompt(
+      "ses_1",
+      "hello",
+      [{ uri: "data:text/plain;base64,aGk=", name: "note.txt" }],
+      [],
+      {
+        agent: "build",
+        model: { providerID: "openai", id: "gpt-5", variant: "high" },
+      },
+    );
 
     expect(calls).toEqual([
       ["agent", { sessionID: "ses_1", agent: "build" }],
@@ -122,6 +128,40 @@ describe("OpenCodeApi mutations", () => {
           files: [{ uri: "data:text/plain;base64,aGk=", name: "note.txt" }],
         },
       ],
+    ]);
+  });
+
+  it("sends native skill attachments with the prompt", async () => {
+    const calls: Array<[string, unknown]> = [];
+    const client = {
+      session: {
+        switchAgent: async (input: unknown) => {
+          calls.push(["agent", input]);
+        },
+        switchModel: async (input: unknown) => {
+          calls.push(["model", input]);
+        },
+        prompt: async (input: unknown) => {
+          calls.push(["prompt", input]);
+          return { data: {} };
+        },
+      },
+    } as unknown as OpenCodeClient;
+
+    const { OpenCodeApi } = await import("../src/services/openCodeApi");
+    const api = new OpenCodeApi({ serverUrl: "http://localhost:4096", password: "secret" }, client);
+    await api.prompt("ses_1", "/release prepare v2", [], [{ id: "release" }], {
+      agent: "build",
+      model: { providerID: "openai", id: "gpt-5" },
+    });
+
+    expect(calls[2]).toEqual([
+      "prompt",
+      {
+        sessionID: "ses_1",
+        text: "/release prepare v2",
+        skills: [{ id: "release" }],
+      },
     ]);
   });
 
@@ -192,6 +232,23 @@ describe("OpenCodeApi mutations", () => {
           };
         },
       },
+      skill: {
+        list: async (input: unknown) => {
+          inputs.push(input);
+          return {
+            data: [
+              {
+                id: "release",
+                name: "Git Release",
+                description: "Prepare a repository release",
+                autoinvoke: false,
+                path: "/workspace/.opencode/skills/release/SKILL.md",
+                content: "Release workflow",
+              },
+            ],
+          };
+        },
+      },
     } as unknown as OpenCodeClient;
 
     const { OpenCodeApi } = await import("../src/services/openCodeApi");
@@ -214,9 +271,10 @@ describe("OpenCodeApi mutations", () => {
         },
       ],
       providers: [{ id: "openai", name: "OpenAI" }],
+      skills: [{ id: "release", name: "Git Release" }],
       defaultModel: { providerID: "openai", id: "gpt-5" },
     });
-    expect(inputs).toEqual([location, location, location, location]);
+    expect(inputs).toEqual([location, location, location, location, location]);
   });
 
   it("reads active session IDs", async () => {

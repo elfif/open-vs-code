@@ -17,12 +17,17 @@ export interface PromptFileAttachmentInput {
   readonly name?: string;
 }
 
+export interface PromptSkillAttachmentInput {
+  readonly id: string;
+}
+
 export type PromptPayloadResult =
   | {
       readonly ok: true;
       readonly payload: {
         readonly text: string;
         readonly files: readonly PromptFileAttachmentInput[];
+        readonly skills: readonly PromptSkillAttachmentInput[];
       };
       readonly referencedDocumentIDs: readonly string[];
     }
@@ -483,6 +488,18 @@ export function collectDocumentIDs(parts: readonly PromptSegment[]): string[] {
   return [...ids];
 }
 
+export function collectSkillIDs(parts: readonly PromptSegment[]): string[] {
+  const ids = new Set<string>();
+
+  for (const part of parts) {
+    if (part.kind === "skill") {
+      ids.add(part.id);
+    }
+  }
+
+  return [...ids];
+}
+
 export function buildPromptPayload(
   parts: readonly PromptSegment[],
   documents: ReadonlyMap<string, StagedDocumentContent>,
@@ -497,7 +514,9 @@ export function buildPromptPayload(
   }
 
   const files: PromptFileAttachmentInput[] = [];
+  const skills: PromptSkillAttachmentInput[] = [];
   const seenFileIDs = new Set<string>();
+  const seenSkillIDs = new Set<string>();
   let output = "";
   let previousWasBlock = false;
 
@@ -513,6 +532,16 @@ export function buildPromptPayload(
 
     if (segment.kind === "selection") {
       appendContent(formatSelection(segment), true);
+      continue;
+    }
+
+    if (segment.kind === "skill") {
+      if (!seenSkillIDs.has(segment.id)) {
+        seenSkillIDs.add(segment.id);
+        skills.push({ id: segment.id });
+      }
+
+      appendContent(`/${segment.id}`, false);
       continue;
     }
 
@@ -556,6 +585,7 @@ export function buildPromptPayload(
     payload: {
       text: output.trim(),
       files,
+      skills,
     },
     referencedDocumentIDs: collectDocumentIDs(parts),
   };

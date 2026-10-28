@@ -18,6 +18,12 @@ const selection: PromptSegment = {
   languageId: "typescriptreact",
 };
 
+const skill: PromptSegment = {
+  kind: "skill",
+  id: "git-release",
+  name: "Git Release",
+};
+
 describe("classifyDocument", () => {
   it("classifies source code and compound extensions", () => {
     expect(classifyDocument("App.tsx")).toBe("text");
@@ -74,6 +80,26 @@ selected content:
 const first = true;
 const second = false;
 \`\`\``);
+    }
+  });
+
+  it("serializes skills as slash text and native attachments", () => {
+    const result = buildPromptPayload([skill, { kind: "text", text: " prepare v2" }], new Map());
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.payload.text).toBe("/git-release prepare v2");
+      expect(result.payload.skills).toEqual([{ id: "git-release" }]);
+    }
+  });
+
+  it("deduplicates native skill attachments by id", () => {
+    const result = buildPromptPayload([skill, skill], new Map());
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.payload.text).toBe("/git-release/git-release");
+      expect(result.payload.skills).toEqual([{ id: "git-release" }]);
     }
   });
 

@@ -41,10 +41,11 @@ Two build targets, one shared protocol:
   - `src/shared/protocol.ts` — **single source of truth** for all extension<->webview messages and shared types. Change here first.
 - **Webview** (`webview/`, React 19 + Lexical + Vite + Tailwind CSS v4 + shadcn/ui, built to `dist/webview/`):
   - `webview/src/App.tsx` — root component, reducer (open tabs, per-tab prompt drafts, connection status), `ResizeObserver` on `<main>` tracks panel height.
-  - `webview/src/components/` — `AuthPanel`, `SessionList`, `SessionTabs`, `TranscriptView`, `PromptComposer`, `PromptToolbar`, and the Lexical `ContextBadgeNode`/`ContextBadge` pair.
+  - `webview/src/components/` — `AuthPanel`, `SessionList`, `SessionTabs`, `TranscriptView`, `PromptComposer`, `PromptToolbar`, `SkillPicker`, `SkillPickerPlugin`, and the Lexical `ContextBadgeNode`/`ContextBadge` pair.
   - `webview/src/components/ui/` — shadcn primitives (generated; see `webview/components.json`).
   - `webview/src/lib/promptHeight.ts` — pure composer auto-size math (unit-tested).
   - `webview/src/lib/promptSelection.ts` — pure agent/model/variant initialization, transitions, and provider grouping (unit-tested).
+  - `webview/src/lib/skillTrigger.ts` — pure slash-query detection, skill filtering, and skill-menu placement math (unit-tested).
   - `webview/src/lib/dropZone.ts` — DOM-free `DataTransfer` snapshotting, drag/paste acceptance rules, and URI resolution for drops (unit-tested).
   - `webview/src/lib/fileTransfer.ts` — browser `File` to base64 helper for staging.
   - `webview/src/lib/vscode.ts` — `acquireVsCodeApi()` wrapper and postMessage helper.
@@ -65,10 +66,12 @@ Two build targets, one shared protocol:
 - Document size limits: **10 MB per file** and **30 MB total per submitted prompt**.
 - Selection badges display `{filename} - l{from} - {to}` (only `l{from}` for one line), preserve the exact code selected at insertion time, show a code-preview tooltip, and serialize as a `### File content` Markdown block. The extension host serializes webview `PromptSegment[]` and staged document payloads before calling `session.prompt`.
 - Prompt toolbar selections are kept per open session tab. Agent defaults may change the model and variant; changing models resets the variant; the variant selector is hidden for models without variants.
+- Typing `/` at the start of the prompt or after whitespace opens a caret-positioned skill picker populated from `skill.list`. The picker shows only skill names, filters incrementally by name or ID, and supports Arrow keys, Enter/Tab, Escape, and mouse selection. Selecting a skill replaces the slash query with an inline `/skill-id` badge and a trailing space.
+- Skill badges serialize as ordinary `/skill-id` text in the submitted prompt and are also sent as native OpenCode `skills[]` attachments, deduplicated by skill ID.
 - Polling: session list every **10s**; active transcript every **2s** while session is actively handled (OpenCode `session.active` + short optimistic window after submit), **20s** when idle.
 - Prompt composer sizing: empty = 4 rows; grows to content + 2 empty rows; no scrollbar until 40% of panel height; then fixed with vertical scroll. Min wins if the cap is smaller than the minimum; no cap when panel height is unknown (≤0).
 - Prompt drafts (including inline context badges) are kept per open session tab in webview state.
-- Explicitly **out of scope**: tool controls, MCP selection, @-mentions, skills, starting/discovering/managing the OpenCode server from the extension.
+- Explicitly **out of scope**: tool controls, MCP selection, @-mentions, starting/discovering/managing the OpenCode server from the extension.
 
 ## OpenCode server
 
@@ -78,7 +81,7 @@ Two build targets, one shared protocol:
 
 ## Testing
 
-- Vitest, node environment, tests in `tests/*.test.ts` only (`vitest.config.ts`). No DOM/React component tests — logic is extracted into pure modules (`promptContent`, `promptDocuments`, `uriList`, `selectionContext`, `promptHeight`, `sessionGroups`, `transcript`, `pollingController`, `documentStore`) precisely so it can be tested without a DOM.
+- Vitest, node environment, tests in `tests/*.test.ts` only (`vitest.config.ts`). No DOM/React component tests — logic is extracted into pure modules (`promptContent`, `promptDocuments`, `uriList`, `selectionContext`, `promptHeight`, `promptSelection`, `skillTrigger`, `sessionGroups`, `transcript`, `pollingController`, `documentStore`) precisely so it can be tested without a DOM.
 - Run: `npm test`.
 
 ## Conventions
@@ -99,4 +102,4 @@ Two build targets, one shared protocol:
 
 ## Current state (as of last session)
 
-Implemented and tested: auth flow, session list with grouping, closable in-sidebar session tabs with read-only transcripts, session creation, prompt submission, dynamic polling, prompt auto-grow, and the per-session agent/model/variant prompt toolbar. The model picker is a searchable dialog grouped by provider. Prompt submission switches the session agent and model before sending the prompt. Explorer files, Explorer drag/copy, desktop drag/drop, clipboard files, and exact editor selections can be inserted as inline Lexical badges with preview tooltips. Supported text/source files are injected as fenced prompt content; supported images and PDFs are staged in the extension host and submitted as native OpenCode file attachments.
+Implemented and tested: auth flow, session list with grouping, closable in-sidebar session tabs with read-only transcripts, session creation, prompt submission, dynamic polling, prompt auto-grow, the per-session agent/model/variant prompt toolbar, and slash-triggered skill selection. The model picker is a searchable dialog grouped by provider. The skill picker lists registered skills by name at the caret, filters as the user types, and inserts removable `/skill-id` badges. Prompt submission switches the session agent and model before sending the prompt. Explorer files, Explorer drag/copy, desktop drag/drop, clipboard files, and exact editor selections can be inserted as inline Lexical badges with preview tooltips. Supported text/source files are injected as fenced prompt content; supported images and PDFs are staged in the extension host and submitted as native OpenCode file attachments.

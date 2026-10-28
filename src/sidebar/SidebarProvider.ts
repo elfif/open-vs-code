@@ -612,7 +612,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    const { text, files } = build.payload;
+    const { text, files, skills } = build.payload;
 
     this.promptSubmitting.add(sessionID);
     this.setOptimisticallyActive(sessionID);
@@ -628,6 +628,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           sessionID,
           text,
           files,
+          skills,
           selection,
           AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         );
@@ -687,7 +688,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     const directory = this.getWorkspaceDirectory();
 
     if (!directory) {
-      this.promptCatalog = { agents: [], models: [], providers: [], defaultModel: null };
+      this.promptCatalog = {
+        agents: [],
+        models: [],
+        providers: [],
+        skills: [],
+        defaultModel: null,
+      };
       this.postMessage({ type: "promptCatalog", status: "ready", catalog: this.promptCatalog });
       return;
     }

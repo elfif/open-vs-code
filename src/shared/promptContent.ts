@@ -11,12 +11,17 @@ export type {
   PromptDocumentSegment,
   PromptSegment,
   PromptSelectionSegment,
+  PromptSkillSegment,
   PromptTextSegment,
 } from "./promptTypes";
 
 const PREVIEW_LINE_LIMIT = 12;
 
 export function formatBadgeLabel(segment: PromptContextSegment): string {
+  if (segment.kind === "skill") {
+    return `/${segment.id}`;
+  }
+
   if (segment.kind === "document") {
     return `${segment.name} (${formatBytes(segment.size)})`;
   }
@@ -29,6 +34,10 @@ export function formatBadgeLabel(segment: PromptContextSegment): string {
 }
 
 export function formatBadgePreview(segment: PromptContextSegment): string {
+  if (segment.kind === "skill") {
+    return `Skill: ${segment.name}\nID: ${segment.id}`;
+  }
+
   if (segment.kind === "document") {
     return `${segment.path || segment.name}\n${segment.mime} • ${formatBytes(segment.size)}`;
   }
@@ -69,6 +78,14 @@ export function isPromptSegment(value: unknown): value is PromptSegment {
         typeof value.mime === "string" &&
         typeof value.size === "number" &&
         (!("path" in value) || typeof value.path === "string")
+      );
+    case "skill":
+      return (
+        "id" in value &&
+        "name" in value &&
+        typeof value.id === "string" &&
+        value.id.length > 0 &&
+        typeof value.name === "string"
       );
     case "selection":
       return (
