@@ -1,6 +1,11 @@
 # Open VS Code
 
 Open VS Code is a VS Code extension that connects directly to an OpenCode V2 HTTP server and provides an OpenCode session browser and prompt composer in the sidebar.
+Main difference with the officialm extension is that this extension relies directly on the OpenCode API instead oof just calling the existing TUI in a side panel.
+This allow further integration of the opencode features in vs code like: 
+* contextual menus
+* global commands and shortcuts
+* global theme adoption 
 
 ## Features
 
