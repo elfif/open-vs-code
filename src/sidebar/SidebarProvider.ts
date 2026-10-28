@@ -718,6 +718,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     if (!directory) {
       this.promptCatalog = {
         agents: [],
+        agentColors: {},
         models: [],
         providers: [],
         skills: [],
@@ -851,9 +852,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     });
 
     try {
+      // Fallback for a prompt with no assistant reply yet: the session's
+      // current agent is the one it was sent to.
+      const fallbackAgent = this.sessions.find((session) => session.id === sessionID)?.agent;
       const snapshot = await this.api.listMessages(
         sessionID,
         AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        fallbackAgent,
       );
       this.transcriptItems = snapshot.items;
       this.transcriptUsage = snapshot.usage;

@@ -44,9 +44,15 @@ describe("normalizeTranscriptMessages", () => {
     ]);
 
     expect(items).toMatchObject([
-      { id: "user-1", kind: "user", text: "Hello", attachments: ["a.txt"] },
+      {
+        id: "user-1",
+        kind: "user",
+        text: "Hello",
+        agent: "build",
+        attachments: ["a.txt"],
+      },
       { id: "assistant-1:0", kind: "assistant", text: "Hi", agent: "build", model: "openai/gpt" },
-      { id: "assistant-1:1", kind: "reasoning", text: "Thinking" },
+      { id: "assistant-1:1", kind: "reasoning", text: "Thinking", agent: "build" },
       {
         id: "assistant-1:2",
         kind: "tool",
@@ -54,8 +60,65 @@ describe("normalizeTranscriptMessages", () => {
         status: "completed",
         input: '{\n  "path": "/tmp/a.txt"\n}',
         output: "file contents",
+        agent: "build",
       },
     ]);
+  });
+
+  it("derives the user prompt agent from the next assistant reply across messages", () => {
+    const items = normalizeTranscriptMessages([
+      {
+        id: "user-1",
+        type: "user",
+        text: "Do a thing",
+        time: { created: 10 },
+      },
+      {
+        id: "switch-1",
+        type: "model-switched",
+        time: { created: 15 },
+        model: { id: "gpt", providerID: "openai" },
+      },
+      {
+        id: "assistant-1",
+        type: "assistant",
+        agent: "explore",
+        model: { id: "gpt", providerID: "openai" },
+        time: { created: 20 },
+        content: [{ type: "text", text: "Done" }],
+      },
+    ]);
+
+    expect(items[0]).toMatchObject({ kind: "user", agent: "explore" });
+  });
+
+  it("falls back to the session agent for a prompt with no assistant reply", () => {
+    const items = normalizeTranscriptMessages(
+      [
+        {
+          id: "user-1",
+          type: "user",
+          text: "Still pending",
+          time: { created: 10 },
+        },
+      ],
+      "plan",
+    );
+
+    expect(items[0]).toMatchObject({ kind: "user", agent: "plan" });
+  });
+
+  it("omits the user agent when neither a reply nor a fallback exists", () => {
+    const items = normalizeTranscriptMessages([
+      {
+        id: "user-1",
+        type: "user",
+        text: "Orphan",
+        time: { created: 10 },
+      },
+    ]);
+
+    expect(items[0]).not.toHaveProperty("agent");
   });
 
   it("normalizes activity messages", () => {

@@ -29,6 +29,16 @@ export interface AgentColorSource {
   readonly color?: string;
 }
 
+function colorAt(agents: readonly AgentColorSource[], index: number): string {
+  const declared = agents[index]?.color;
+
+  if (declared !== undefined && HEX_COLOR.test(declared)) {
+    return declared;
+  }
+
+  return AGENT_COLOR_PALETTE[index % AGENT_COLOR_PALETTE.length];
+}
+
 /**
  * Resolve the UI color for `agentID` against the full visible agent list in
  * server order (subagents included), like the TUI's `agent.color()`.
@@ -40,15 +50,18 @@ export function resolveAgentColor(
 ): string | undefined {
   const index = visibleAgents.findIndex((agent) => agent.id === agentID);
 
-  if (index === -1) {
-    return undefined;
-  }
+  return index === -1 ? undefined : colorAt(visibleAgents, index);
+}
 
-  const declared = visibleAgents[index]?.color;
-
-  if (declared !== undefined && HEX_COLOR.test(declared)) {
-    return declared;
-  }
-
-  return AGENT_COLOR_PALETTE[index % AGENT_COLOR_PALETTE.length];
+/**
+ * Resolve colors for every agent in the visible list, keyed by agent id.
+ * Used for transcript entries whose agent may not be user-selectable
+ * (e.g. subagent answers).
+ */
+export function resolveAgentColors(
+  visibleAgents: readonly AgentColorSource[],
+): Readonly<Record<string, string>> {
+  return Object.fromEntries(
+    visibleAgents.map((agent, index) => [agent.id, colorAt(visibleAgents, index)]),
+  );
 }

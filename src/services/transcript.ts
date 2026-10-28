@@ -15,18 +15,22 @@ import { compactionSizes } from "./contextUsage";
 
 export function normalizeTranscriptMessages(
   messages: readonly SessionMessageInfo[],
+  fallbackAgent?: string,
 ): TranscriptItem[] {
-  return messages.flatMap((message, index) => toTranscriptItems(message, index, messages));
+  return messages.flatMap((message, index) =>
+    toTranscriptItems(message, index, messages, fallbackAgent),
+  );
 }
 
 function toTranscriptItems(
   message: SessionMessageInfo,
   index: number,
   messages: readonly SessionMessageInfo[],
+  fallbackAgent?: string,
 ): TranscriptItem[] {
   switch (message.type) {
     case "user":
-      return [toUserItem(message)];
+      return [toUserItem(message, effectiveUserAgent(messages, index, fallbackAgent))];
     case "assistant":
       return toAssistantItems(message);
     case "agent-switched":
@@ -108,12 +112,34 @@ function toTranscriptItems(
   }
 }
 
-function toUserItem(message: SessionMessageUser): TranscriptItem {
+/**
+ * The agent a user prompt was sent to is not stored on the message. Derive it
+ * from the next assistant reply (the agent that handled the prompt); for a
+ * prompt with no reply yet, fall back to the session's current agent.
+ */
+function effectiveUserAgent(
+  messages: readonly SessionMessageInfo[],
+  index: number,
+  fallbackAgent?: string,
+): string | undefined {
+  for (let i = index + 1; i < messages.length; i += 1) {
+    const message = messages[i];
+
+    if (message?.type === "assistant") {
+      return message.agent;
+    }
+  }
+
+  return fallbackAgent;
+}
+
+function toUserItem(message: SessionMessageUser, sentAgent: string | undefined): TranscriptItem {
   return {
     id: message.id,
     kind: "user",
     timestamp: message.time.created,
     text: message.text,
+    ...(sentAgent ? { agent: sentAgent } : {}),
     attachments: [
       ...(message.files ?? []).map(fileAttachmentLabel),
       ...(message.agents ?? []).map((agent) => `@${agent.name}`),
@@ -146,14 +172,15 @@ function toAssistantItems(message: SessionMessageAssistant): TranscriptItem[] {
         kind: "reasoning",
         timestamp: content.time?.created ?? message.time.created,
         text: content.text,
+        agent: message.agent,
       };
     }
 
-    return toToolItem(id, content);
+    return toToolItem(id, content, message.agent);
   });
 }
 
-function toToolItem(id: string, tool: SessionMessageAssistantTool): TranscriptItem {
+function toToolItem(id: string, tool: SessionMessageAssistantTool, agent: string): TranscriptItem {
   return {
     id,
     kind: "tool",
@@ -162,6 +189,7 @@ function toToolItem(id: string, tool: SessionMessageAssistantTool): TranscriptIt
     status: tool.state.status,
     input: stringifyInput(tool.state),
     output: stringifyOutput(tool.state),
+    agent,
   };
 }
 

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { AGENT_COLOR_PALETTE, resolveAgentColor } from "../src/shared/agentColor";
+import {
+  AGENT_COLOR_PALETTE,
+  resolveAgentColor,
+  resolveAgentColors,
+} from "../src/shared/agentColor";
 
 describe("resolveAgentColor", () => {
   it("prefers a declared hex color", () => {
@@ -52,5 +56,26 @@ describe("resolveAgentColor", () => {
 
   it("returns undefined for unknown agents", () => {
     expect(resolveAgentColor([{ id: "a" }], "missing")).toBeUndefined();
+  });
+});
+
+describe("resolveAgentColors", () => {
+  it("maps every visible agent to its resolved color, subagents included", () => {
+    const agents = [{ id: "build" }, { id: "task", color: "#ff0000" }, { id: "plan" }];
+
+    expect(resolveAgentColors(agents)).toEqual({
+      build: AGENT_COLOR_PALETTE[0],
+      task: "#ff0000",
+      plan: AGENT_COLOR_PALETTE[2],
+    });
+  });
+
+  it("agrees with resolveAgentColor for every agent in the list", () => {
+    const agents = [{ id: "a" }, { id: "b", color: "#abc123" }, { id: "c", color: "bogus" }];
+    const colors = resolveAgentColors(agents);
+
+    for (const agent of agents) {
+      expect(colors[agent.id]).toBe(resolveAgentColor(agents, agent.id));
+    }
   });
 });

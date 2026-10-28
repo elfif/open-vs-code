@@ -59,6 +59,11 @@ export interface SkillOption {
 
 export interface PromptCatalog {
   readonly agents: readonly AgentOption[];
+  /**
+   * Resolved colors for every visible agent (subagents included), keyed by agent
+   * id. Transcript entries may reference agents that are not user-selectable.
+   */
+  readonly agentColors: Readonly<Record<string, string>>;
   readonly models: readonly ModelOption[];
   readonly providers: readonly ProviderOption[];
   readonly skills: readonly SkillOption[];
@@ -83,6 +88,8 @@ export type TranscriptItem =
       readonly timestamp: number;
       readonly text: string;
       readonly attachments: readonly string[];
+      /** Agent the prompt was sent to (derived; absent when unknown). */
+      readonly agent?: string;
     }
   | {
       readonly id: string;
@@ -98,6 +105,8 @@ export type TranscriptItem =
       readonly kind: "reasoning";
       readonly timestamp: number;
       readonly text: string;
+      /** Agent that produced this reasoning. */
+      readonly agent?: string;
     }
   | {
       readonly id: string;
@@ -107,6 +116,8 @@ export type TranscriptItem =
       readonly status: string;
       readonly input: string;
       readonly output: string;
+      /** Agent that ran this tool. */
+      readonly agent?: string;
     }
   | {
       readonly id: string;

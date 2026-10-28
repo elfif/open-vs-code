@@ -271,6 +271,11 @@ describe("OpenCodeApi mutations", () => {
           color: AGENT_COLOR_PALETTE[2],
         },
       ],
+      agentColors: {
+        build: AGENT_COLOR_PALETTE[0],
+        task: AGENT_COLOR_PALETTE[1],
+        plan: AGENT_COLOR_PALETTE[2],
+      },
       models: [
         {
           id: "gpt-5",

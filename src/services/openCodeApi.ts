@@ -8,7 +8,7 @@ import {
   type SessionMessageInfo,
 } from "@opencode/client";
 
-import { resolveAgentColor } from "../shared/agentColor";
+import { resolveAgentColor, resolveAgentColors } from "../shared/agentColor";
 import type {
   PromptFileAttachmentInput,
   PromptSkillAttachmentInput,
@@ -154,7 +154,11 @@ export class OpenCodeApi {
     return response.data.map(toSessionListItem);
   }
 
-  public async listMessages(sessionID: string, signal?: AbortSignal): Promise<TranscriptSnapshot> {
+  public async listMessages(
+    sessionID: string,
+    signal?: AbortSignal,
+    fallbackAgent?: string,
+  ): Promise<TranscriptSnapshot> {
     const response = await this.client.message.list(
       {
         sessionID,
@@ -166,7 +170,7 @@ export class OpenCodeApi {
     const messages = [...response.data].reverse();
 
     return {
-      items: normalizeTranscriptMessages(messages),
+      items: normalizeTranscriptMessages(messages, fallbackAgent),
       usage: computeContextUsage(messages),
       messages,
     };
@@ -211,6 +215,7 @@ export class OpenCodeApi {
           color: resolveAgentColor(visibleAgents, agent.id),
           ...(agent.model ? { model: toPromptModel(agent.model) } : {}),
         })),
+      agentColors: resolveAgentColors(visibleAgents),
       models: models.data
         .filter((model) => model.enabled && availableProviderIds.has(model.providerID))
         .map((model) => {

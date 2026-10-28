@@ -96,6 +96,7 @@ const initialState: PanelState = {
 
 const EMPTY_PROMPT: readonly PromptSegment[] = [];
 const EMPTY_INSERTS: readonly PendingContextInsert[] = [];
+const EMPTY_AGENT_COLORS: Readonly<Record<string, string>> = {};
 
 let nextContextInsertID = 1;
 let nextDocumentRequestID = 1;
@@ -714,6 +715,7 @@ export default function App() {
                 items={state.transcriptItems}
                 loading={state.transcriptStatus === "loading"}
                 error={state.transcriptError}
+                agentColors={state.promptCatalog?.agentColors ?? EMPTY_AGENT_COLORS}
               />
               <PromptComposer
                 key={`${state.activeTabID}:${state.draftVersionsBySession[state.activeTabID] ?? 0}`}
