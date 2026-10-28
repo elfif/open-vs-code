@@ -50,6 +50,16 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
+/*
+ * The context bar references these from an inline gradient style, so no utility
+ * class pulls them into the build. `static` keeps them in the output.
+ */
+@theme static inline {
+  --color-context-safe: var(--vscode-charts-green, #2ea043);
+  --color-context-warn: var(--vscode-charts-yellow, #d29922);
+  --color-context-danger: var(--vscode-charts-red, #f14c4c);
+}
+
 html,
 body,
 #root {

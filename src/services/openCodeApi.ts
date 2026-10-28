@@ -13,12 +13,14 @@ import type {
   PromptSkillAttachmentInput,
 } from "../shared/promptDocuments";
 import type {
+  ContextUsage,
   PromptCatalog,
   PromptModel,
   PromptSelection,
   SessionListItem,
   TranscriptItem,
 } from "../shared/protocol";
+import { computeContextUsage } from "./contextUsage";
 import { normalizeTranscriptMessages } from "./transcript";
 
 export const SESSION_PAGE_SIZE = 50;
@@ -34,6 +36,12 @@ export interface ApiError {
 export interface OpenCodeCredential {
   readonly serverUrl: string;
   readonly password: string;
+}
+
+export interface TranscriptSnapshot {
+  readonly items: TranscriptItem[];
+  readonly usage: ContextUsage | null;
+  readonly messages: readonly SessionMessageInfo[];
 }
 
 export function normalizeServerUrl(input: string): string {
@@ -145,7 +153,7 @@ export class OpenCodeApi {
     return response.data.map(toSessionListItem);
   }
 
-  public async listMessages(sessionID: string, signal?: AbortSignal): Promise<TranscriptItem[]> {
+  public async listMessages(sessionID: string, signal?: AbortSignal): Promise<TranscriptSnapshot> {
     const response = await this.client.message.list(
       {
         sessionID,
@@ -154,8 +162,13 @@ export class OpenCodeApi {
       },
       { signal },
     );
+    const messages = [...response.data].reverse();
 
-    return normalizeTranscriptMessages([...response.data].reverse());
+    return {
+      items: normalizeTranscriptMessages(messages),
+      usage: computeContextUsage(messages),
+      messages,
+    };
   }
 
   public async createSession(directory: string, signal?: AbortSignal): Promise<SessionListItem> {
@@ -195,12 +208,17 @@ export class OpenCodeApi {
         })),
       models: models.data
         .filter((model) => model.enabled && availableProviderIds.has(model.providerID))
-        .map((model) => ({
-          id: model.id,
-          providerID: model.providerID,
-          name: model.name,
-          variants: model.variants.map((variant) => variant.id),
-        })),
+        .map((model) => {
+          const contextLimit = modelContextLimit(model);
+
+          return {
+            id: model.id,
+            providerID: model.providerID,
+            name: model.name,
+            variants: model.variants.map((variant) => variant.id),
+            ...(contextLimit === undefined ? {} : { contextLimit }),
+          };
+        }),
       providers: providers.data
         .filter((provider) => provider.activation !== "disabled")
         .map((provider) => ({ id: provider.id, name: provider.name })),
@@ -230,6 +248,10 @@ export class OpenCodeApi {
     );
   }
 
+  public async compactSession(sessionID: string, signal?: AbortSignal): Promise<void> {
+    await this.client.session.compact({ sessionID }, { signal });
+  }
+
   public async getActiveSessionIds(signal?: AbortSignal): Promise<Set<string>> {
     const response = await this.client.session.active({ signal });
     return new Set(Object.keys(response));
@@ -252,6 +274,23 @@ function toPromptModel(model: ModelRef): PromptModel {
     id: model.id,
     ...(model.variant ? { variant: model.variant } : {}),
   };
+}
+
+/** The input limit is the real prompt ceiling when the model declares one. */
+function modelContextLimit(model: {
+  readonly limit?: { readonly context?: number; readonly input?: number };
+}): number | undefined {
+  const input = model.limit?.input;
+
+  if (typeof input === "number" && Number.isFinite(input) && input > 0) {
+    return input;
+  }
+
+  const context = model.limit?.context;
+
+  return typeof context === "number" && Number.isFinite(context) && context > 0
+    ? context
+    : undefined;
 }
 
 function errorMessage(error: unknown): string | undefined {

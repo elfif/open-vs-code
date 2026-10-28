@@ -10,6 +10,7 @@ import {
 import { buildPromptPayload, MAX_DOCUMENT_BYTES, formatBytes } from "../shared/promptDocuments";
 import {
   SESSIONS_TAB_ID,
+  type ContextUsage,
   type ExtensionToWebview,
   type LoadStatus,
   type PromptCatalog,
@@ -20,13 +21,19 @@ import {
   type TranscriptItem,
   type WebviewToExtension,
 } from "../shared/protocol";
+import { findCompactionAfter } from "../services/contextUsage";
 import { CredentialStore, type StoredCredential } from "../services/credentialStore";
 import {
   createDocumentFromBytes,
   DocumentStore,
   type StagedDocument,
 } from "../services/documentStore";
-import { OpenCodeApi, normalizeServerUrl, toApiError } from "../services/openCodeApi";
+import {
+  OpenCodeApi,
+  normalizeServerUrl,
+  toApiError,
+  type SessionMessageInfo,
+} from "../services/openCodeApi";
 import { PollingController } from "../services/pollingController";
 import { groupSessionsByUpdateDate } from "../services/sessionGroups";
 
@@ -35,6 +42,7 @@ const ACTIVE_TRANSCRIPT_POLL_MS = 2_000;
 const IDLE_TRANSCRIPT_POLL_MS = 20_000;
 const OPTIMISTIC_ACTIVE_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 10_000;
+const COMPACTION_TIMEOUT_MS = 120_000;
 const PENDING_DOCUMENT_SESSION_ID = "__pending_documents__";
 const READABLE_URI_SCHEMES = new Set(["file", "vscode-remote"]);
 
@@ -52,6 +60,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private sessions: SessionListItem[] = [];
   private promptCatalog: PromptCatalog | null = null;
   private transcriptItems: TranscriptItem[] = [];
+  private transcriptUsage: ContextUsage | null = null;
+  private readonly compactingAt = new Map<string, number>();
+  private readonly lastActivitySent = new Map<string, string>();
   private tabs: SessionTab[] = [sessionsTab()];
   private activeTabID = SESSIONS_TAB_ID;
   private activeSessionIds = new Set<string>();
@@ -249,6 +260,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       case "pickFiles":
         await this.addFiles(await this.pickFileUris(), message.sessionID);
         break;
+      case "compactSession":
+        await this.compactSession(message.sessionID);
+        break;
     }
   }
 
@@ -364,6 +378,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     const index = this.tabs.findIndex((candidate) => candidate.id === tabID);
     this.tabs = this.tabs.filter((candidate) => candidate.id !== tabID);
     this.documentStore.clearSession(tabID);
+    this.compactingAt.delete(tabID);
+    this.lastActivitySent.delete(tabID);
 
     if (this.activeTabID === tabID) {
       const fallback = this.tabs[Math.max(0, index - 1)] ?? sessionsTab();
@@ -605,6 +621,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    if (this.compactingAt.has(sessionID)) {
+      this.postMessage({
+        type: "promptStatus",
+        sessionID,
+        status: "error",
+        error: "Wait for compaction to finish before sending a prompt.",
+      });
+      return;
+    }
+
     const build = buildPromptPayload(parts, this.documentStore.getSessionMap(sessionID));
 
     if (!build.ok) {
@@ -617,6 +643,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     this.promptSubmitting.add(sessionID);
     this.setOptimisticallyActive(sessionID);
     this.postMessage({ type: "promptStatus", sessionID, status: "submitting" });
+    this.publishActivity(sessionID);
 
     try {
       await this.enqueue(async () => {
@@ -659,6 +686,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       });
     } finally {
       this.promptSubmitting.delete(sessionID);
+      this.publishActivity(sessionID);
     }
   }
 
@@ -747,6 +775,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       ) {
         this.activePromptSessionID = null;
       }
+
+      this.publishActivity(this.activeTabID);
     } catch (error) {
       const apiError = toApiError(error);
 
@@ -817,12 +847,25 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       sessionID,
       status: "loading",
       items: this.transcriptItems,
+      usage: this.transcriptUsage,
     });
 
     try {
-      const items = await this.api.listMessages(sessionID, AbortSignal.timeout(REQUEST_TIMEOUT_MS));
-      this.transcriptItems = items;
-      this.postMessage({ type: "transcript", sessionID, status: "ready", items });
+      const snapshot = await this.api.listMessages(
+        sessionID,
+        AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      );
+      this.transcriptItems = snapshot.items;
+      this.transcriptUsage = snapshot.usage;
+      this.postMessage({
+        type: "transcript",
+        sessionID,
+        status: "ready",
+        items: snapshot.items,
+        usage: snapshot.usage,
+      });
+      this.settleCompaction(sessionID, snapshot.messages);
+      this.publishActivity(sessionID);
     } catch (error) {
       const apiError = toApiError(error);
 
@@ -836,6 +879,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         sessionID,
         status: "error",
         items: this.transcriptItems,
+        usage: this.transcriptUsage,
         error: apiError.message,
       });
     }
@@ -851,6 +895,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     this.activeSessionIds.clear();
     this.activePromptSessionID = null;
     this.promptSubmitting.clear();
+    this.compactingAt.clear();
+    this.lastActivitySent.clear();
     this.documentStore.clearAll();
     this.pendingContexts = [];
     this.clearTranscript();
@@ -868,7 +914,148 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   private clearTranscript(): void {
     this.transcriptItems = [];
-    this.postMessage({ type: "transcript", sessionID: null, status: "idle", items: [] });
+    this.transcriptUsage = null;
+    this.postMessage({
+      type: "transcript",
+      sessionID: null,
+      status: "idle",
+      items: [],
+      usage: null,
+    });
+  }
+
+  private async compactSession(sessionID: string): Promise<void> {
+    if (!this.api || sessionID === SESSIONS_TAB_ID) {
+      return;
+    }
+
+    if (!this.tabs.some((tab) => tab.id === sessionID)) {
+      this.postMessage({
+        type: "compactStatus",
+        sessionID,
+        status: "error",
+        error: "That session is no longer open.",
+      });
+      return;
+    }
+
+    if (this.compactingAt.has(sessionID)) {
+      return;
+    }
+
+    if (this.isSessionBusy(sessionID)) {
+      this.postMessage({
+        type: "compactStatus",
+        sessionID,
+        status: "error",
+        error: "Wait for the running prompt to finish before compacting.",
+      });
+      return;
+    }
+
+    this.compactingAt.set(sessionID, Date.now());
+    this.publishActivity(sessionID);
+    this.postMessage({ type: "compactStatus", sessionID, status: "started" });
+
+    try {
+      await this.enqueue(async () => {
+        if (!this.api) {
+          return;
+        }
+
+        await this.api.compactSession(sessionID, AbortSignal.timeout(REQUEST_TIMEOUT_MS));
+
+        if (this.activeTabID === sessionID) {
+          await this.refreshTranscript();
+        }
+      });
+    } catch (error) {
+      const apiError = toApiError(error);
+
+      if (apiError.kind === "auth") {
+        this.requireAuth(apiError.message);
+        return;
+      }
+
+      this.compactingAt.delete(sessionID);
+      this.postMessage({
+        type: "compactStatus",
+        sessionID,
+        status: "error",
+        error: apiError.message,
+      });
+      this.publishActivity(sessionID);
+    }
+  }
+
+  /**
+   * A compaction settles once its terminal message is in the transcript and the
+   * server no longer reports the session as running.
+   */
+  private settleCompaction(sessionID: string, messages: readonly SessionMessageInfo[]): void {
+    const startedAt = this.compactingAt.get(sessionID);
+
+    if (startedAt === undefined) {
+      return;
+    }
+
+    const outcome = findCompactionAfter(messages, startedAt);
+
+    if (!outcome) {
+      if (Date.now() - startedAt > COMPACTION_TIMEOUT_MS) {
+        this.compactingAt.delete(sessionID);
+        this.postMessage({
+          type: "compactStatus",
+          sessionID,
+          status: "error",
+          error: "Compaction did not report back in time.",
+        });
+        this.publishActivity(sessionID);
+      }
+
+      return;
+    }
+
+    if (outcome === "completed" && this.activeSessionIds.has(sessionID)) {
+      return;
+    }
+
+    this.compactingAt.delete(sessionID);
+    this.postMessage({
+      type: "compactStatus",
+      sessionID,
+      status: outcome === "completed" ? "completed" : "error",
+      ...(outcome === "completed" ? {} : { error: "Compaction failed." }),
+    });
+    this.publishActivity(sessionID);
+  }
+
+  private isSessionBusy(sessionID: string): boolean {
+    if (this.activeSessionIds.has(sessionID) || this.promptSubmitting.has(sessionID)) {
+      return true;
+    }
+
+    return (
+      this.activePromptSessionID === sessionID &&
+      Date.now() - this.activePromptAt < OPTIMISTIC_ACTIVE_MS
+    );
+  }
+
+  private publishActivity(sessionID: string): void {
+    if (sessionID === SESSIONS_TAB_ID) {
+      return;
+    }
+
+    const busy = this.isSessionBusy(sessionID);
+    const compacting = this.compactingAt.has(sessionID);
+    const signature = `${busy}:${compacting}`;
+
+    if (this.lastActivitySent.get(sessionID) === signature) {
+      return;
+    }
+
+    this.lastActivitySent.set(sessionID, signature);
+    this.postMessage({ type: "sessionActivity", sessionID, busy, compacting });
   }
 
   private sendTabs(): void {
@@ -928,6 +1115,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
 
     if (this.promptSubmitting.has(this.activeTabID)) {
+      return ACTIVE_TRANSCRIPT_POLL_MS;
+    }
+
+    if (this.compactingAt.has(this.activeTabID)) {
       return ACTIVE_TRANSCRIPT_POLL_MS;
     }
 
@@ -1070,6 +1261,7 @@ function isWebviewMessage(value: unknown): value is WebviewToExtension {
         value.uris.every((uri) => typeof uri === "string")
       );
     case "pickFiles":
+    case "compactSession":
       return "sessionID" in value && typeof value.sessionID === "string";
     case "activateTab":
     case "closeTab":

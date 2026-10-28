@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { Badge } from "@/components/ui/badge";
+import { formatCompactionDelta } from "@shared/contextBar";
 import type { TranscriptItem } from "@shared/protocol";
 
 interface TranscriptViewProps {
@@ -140,6 +141,32 @@ function TranscriptEntry({ item }: { readonly item: TranscriptItem }) {
               Output
             </div>
             <pre className="overflow-x-auto rounded-md bg-input p-2 text-[10px]">{item.output}</pre>
+          </div>
+        ) : null}
+      </details>
+    );
+  }
+
+  if (item.kind === "compaction") {
+    return (
+      <details className="rounded-md border border-border bg-muted/30 p-2 text-xs">
+        <summary className="flex cursor-pointer items-center justify-between gap-2">
+          <span className="truncate font-medium text-muted-foreground">
+            {`Compaction ${item.status} (${item.reason})${formatCompactionDelta(
+              item.fromTokens,
+              item.toTokens,
+            )}`}
+          </span>
+          <Timestamp value={item.timestamp} />
+        </summary>
+        {item.summary ? (
+          <div className="mt-2">
+            <Markdown>{item.summary}</Markdown>
+          </div>
+        ) : null}
+        {item.error ? (
+          <div className="mt-2 rounded-md border border-destructive/40 p-2 text-xs text-destructive">
+            {item.error}
           </div>
         ) : null}
       </details>

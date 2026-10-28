@@ -78,4 +78,105 @@ describe("normalizeTranscriptMessages", () => {
       },
     ]);
   });
+
+  it("normalises a completed compaction into its own item with the summary", () => {
+    const items = normalizeTranscriptMessages([
+      {
+        id: "a1",
+        type: "assistant",
+        agent: "build",
+        model: { id: "gpt", providerID: "openai" },
+        time: { created: 30 },
+        content: [{ type: "text", text: "before compaction" }],
+        tokens: {
+          input: 38_000,
+          output: 5_600,
+          reasoning: 23,
+          cache: { read: 0, write: 0 },
+        },
+      },
+      {
+        id: "cmp-1",
+        type: "compaction",
+        time: { created: 40 },
+        status: "completed",
+        reason: "manual",
+        tokens: {
+          input: 1_159,
+          output: 1_285,
+          reasoning: 11,
+          cache: { read: 43_173, write: 0 },
+        },
+        summary: "## Objective\n- Build the extension",
+      },
+    ]);
+
+    expect(items).toEqual([
+      {
+        id: "a1:0",
+        kind: "assistant",
+        timestamp: 30,
+        text: "before compaction",
+        agent: "build",
+        model: "openai/gpt",
+      },
+      {
+        id: "cmp-1",
+        kind: "compaction",
+        timestamp: 40,
+        status: "completed",
+        reason: "manual",
+        fromTokens: 43_623,
+        toTokens: 1_285,
+        summary: "## Objective\n- Build the extension",
+      },
+    ]);
+  });
+
+  it("falls back to the summarisation prompt when no earlier turn is in the page", () => {
+    const items = normalizeTranscriptMessages([
+      {
+        id: "cmp-1",
+        type: "compaction",
+        time: { created: 40 },
+        status: "completed",
+        reason: "auto",
+        tokens: {
+          input: 975,
+          output: 1_261,
+          reasoning: 224,
+          cache: { read: 222_816, write: 0 },
+        },
+        summary: "summary",
+      },
+    ]);
+
+    expect(items[0]).toMatchObject({ fromTokens: 223_791, toTokens: 1_261 });
+  });
+
+  it("carries the error for a failed compaction and omits a missing summary", () => {
+    const items = normalizeTranscriptMessages([
+      {
+        id: "cmp-2",
+        type: "compaction",
+        time: { created: 50 },
+        status: "failed",
+        reason: "auto",
+        error: { message: "Provider rejected the summary request." },
+      },
+    ]);
+
+    expect(items).toEqual([
+      {
+        id: "cmp-2",
+        kind: "compaction",
+        timestamp: 50,
+        status: "failed",
+        reason: "auto",
+        fromTokens: 0,
+        toTokens: 0,
+        error: "Provider rejected the summary request.",
+      },
+    ]);
+  });
 });

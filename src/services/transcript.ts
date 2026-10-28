@@ -11,14 +11,19 @@ import type {
 } from "@opencode/client";
 
 import type { TranscriptItem } from "../shared/protocol";
+import { compactionSizes } from "./contextUsage";
 
 export function normalizeTranscriptMessages(
   messages: readonly SessionMessageInfo[],
 ): TranscriptItem[] {
-  return messages.flatMap(toTranscriptItems);
+  return messages.flatMap((message, index) => toTranscriptItems(message, index, messages));
 }
 
-function toTranscriptItems(message: SessionMessageInfo): TranscriptItem[] {
+function toTranscriptItems(
+  message: SessionMessageInfo,
+  index: number,
+  messages: readonly SessionMessageInfo[],
+): TranscriptItem[] {
   switch (message.type) {
     case "user":
       return [toUserItem(message)];
@@ -73,15 +78,24 @@ function toTranscriptItems(message: SessionMessageInfo): TranscriptItem[] {
           message.output?.output,
         ),
       ];
-    case "compaction":
+    case "compaction": {
+      const summary = "summary" in message ? message.summary : undefined;
+      const { fromTokens, toTokens } = compactionSizes(messages, index);
+
       return [
-        activity(
-          message.id,
-          message.time.created,
-          `Compaction ${message.status} (${message.reason})`,
-          "error" in message ? message.error.message : message.summary,
-        ),
+        {
+          id: message.id,
+          kind: "compaction",
+          timestamp: message.time.created,
+          status: message.status,
+          reason: message.reason,
+          fromTokens,
+          toTokens,
+          ...(summary ? { summary } : {}),
+          ...("error" in message && message.error ? { error: message.error.message } : {}),
+        },
       ];
+    }
     case "idle":
       return [
         activity(

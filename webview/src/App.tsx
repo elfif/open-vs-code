@@ -20,6 +20,7 @@ import type { PromptSegment } from "@shared/promptContent";
 import {
   SESSIONS_TAB_ID,
   type ConnectionStatus,
+  type ContextUsage,
   type ExtensionToWebview,
   type LoadStatus,
   type ModelOption,
@@ -58,6 +59,11 @@ interface PanelState {
   readonly promptStatusBySession: Readonly<
     Record<string, { readonly status: "submitting" | "error"; readonly error?: string }>
   >;
+  readonly usageBySession: Readonly<Record<string, ContextUsage>>;
+  readonly activityBySession: Readonly<
+    Record<string, { readonly busy: boolean; readonly compacting: boolean }>
+  >;
+  readonly compactErrorBySession: Readonly<Record<string, string>>;
   readonly stagingRequestIDsBySession: Readonly<Record<string, readonly string[]>>;
   readonly documentErrorBySession: Readonly<Record<string, string>>;
 }
@@ -81,6 +87,9 @@ const initialState: PanelState = {
   promptCatalog: null,
   selectionsBySession: {},
   promptStatusBySession: {},
+  usageBySession: {},
+  activityBySession: {},
+  compactErrorBySession: {},
   stagingRequestIDsBySession: {},
   documentErrorBySession: {},
 };
@@ -162,13 +171,59 @@ function reducer(state: PanelState, action: PanelAction): PanelState {
       const nextState = { ...state, tabs: action.tabs, activeTabID: action.activeTabID };
       return { ...nextState, selectionsBySession: initializeSelections(nextState) };
     }
-    case "transcript":
+    case "transcript": {
+      const nextUsage = { ...state.usageBySession };
+
+      if (action.sessionID) {
+        if (action.usage) {
+          nextUsage[action.sessionID] = action.usage;
+        } else {
+          delete nextUsage[action.sessionID];
+        }
+      }
+
       return {
         ...state,
         transcriptStatus: action.status,
         transcriptItems: action.items,
         transcriptError: action.error,
+        usageBySession: nextUsage,
       };
+    }
+    case "sessionActivity":
+      return {
+        ...state,
+        activityBySession: {
+          ...state.activityBySession,
+          [action.sessionID]: { busy: action.busy, compacting: action.compacting },
+        },
+      };
+    case "compactStatus": {
+      const current = state.activityBySession[action.sessionID] ?? {
+        busy: false,
+        compacting: false,
+      };
+      const nextActivity = {
+        ...state.activityBySession,
+        [action.sessionID]: {
+          ...current,
+          compacting: action.status === "started",
+        },
+      };
+      const nextCompactErrors = { ...state.compactErrorBySession };
+
+      if (action.status === "error" && action.error) {
+        nextCompactErrors[action.sessionID] = action.error;
+      } else {
+        delete nextCompactErrors[action.sessionID];
+      }
+
+      return {
+        ...state,
+        activityBySession: nextActivity,
+        compactErrorBySession: nextCompactErrors,
+      };
+    }
     case "promptCatalog": {
       const nextState = {
         ...state,
@@ -366,12 +421,18 @@ function reducer(state: PanelState, action: PanelAction): PanelState {
       const nextSelections = { ...state.selectionsBySession };
       const nextStaging = { ...state.stagingRequestIDsBySession };
       const nextDocumentErrors = { ...state.documentErrorBySession };
+      const nextUsage = { ...state.usageBySession };
+      const nextActivity = { ...state.activityBySession };
+      const nextCompactErrors = { ...state.compactErrorBySession };
       delete nextDrafts[action.sessionID];
       delete nextDraftVersions[action.sessionID];
       delete nextPendingInserts[action.sessionID];
       delete nextSelections[action.sessionID];
       delete nextStaging[action.sessionID];
       delete nextDocumentErrors[action.sessionID];
+      delete nextUsage[action.sessionID];
+      delete nextActivity[action.sessionID];
+      delete nextCompactErrors[action.sessionID];
 
       return {
         ...state,
@@ -381,6 +442,9 @@ function reducer(state: PanelState, action: PanelAction): PanelState {
         selectionsBySession: nextSelections,
         stagingRequestIDsBySession: nextStaging,
         documentErrorBySession: nextDocumentErrors,
+        usageBySession: nextUsage,
+        activityBySession: nextActivity,
+        compactErrorBySession: nextCompactErrors,
       };
     }
   }
@@ -507,6 +571,15 @@ export default function App() {
     : false;
   const activeDocumentError = activeSessionTab
     ? state.documentErrorBySession[state.activeTabID]
+    : undefined;
+  const activeContextUsage = activeSessionTab
+    ? (state.usageBySession[state.activeTabID] ?? null)
+    : null;
+  const activeActivity = activeSessionTab
+    ? (state.activityBySession[state.activeTabID] ?? { busy: false, compacting: false })
+    : { busy: false, compacting: false };
+  const activeCompactError = activeSessionTab
+    ? state.compactErrorBySession[state.activeTabID]
     : undefined;
 
   const handleDocumentFiles = (files: readonly File[]) => {
@@ -656,6 +729,10 @@ export default function App() {
                 catalogStatus={state.promptCatalogStatus}
                 catalogError={state.promptCatalogError}
                 selection={activeSelection}
+                contextUsage={activeContextUsage}
+                busy={activeActivity.busy}
+                compacting={activeActivity.compacting}
+                compactError={activeCompactError}
                 onChange={(value) =>
                   dispatch({ type: "updateDraft", sessionID: state.activeTabID, value })
                 }
@@ -683,6 +760,9 @@ export default function App() {
                     selection: activeSelection,
                   });
                 }}
+                onCompact={() =>
+                  postToExtension({ type: "compactSession", sessionID: state.activeTabID })
+                }
                 onPickFiles={() =>
                   postToExtension({ type: "pickFiles", sessionID: state.activeTabID })
                 }

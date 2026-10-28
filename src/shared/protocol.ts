@@ -41,6 +41,8 @@ export interface ModelOption {
   readonly providerID: string;
   readonly name: string;
   readonly variants: readonly string[];
+  /** Max prompt context in tokens (`limit.input` when set, else `limit.context`). */
+  readonly contextLimit?: number;
 }
 
 export interface ProviderOption {
@@ -110,9 +112,32 @@ export type TranscriptItem =
       readonly timestamp: number;
       readonly label: string;
       readonly detail?: string;
+    }
+  | {
+      readonly id: string;
+      readonly kind: "compaction";
+      readonly timestamp: number;
+      readonly status: string;
+      readonly reason: string;
+      readonly fromTokens: number;
+      readonly toTokens: number;
+      readonly summary?: string;
+      readonly error?: string;
     };
 
 export type LoadStatus = "idle" | "loading" | "ready" | "error";
+
+/** Token occupancy of a session's context window. */
+export interface ContextUsage {
+  readonly total: number;
+  readonly input: number;
+  readonly output: number;
+  readonly reasoning: number;
+  readonly cacheRead: number;
+  readonly cacheWrite: number;
+  /** True when this reflects a compaction summary rather than a measured turn. */
+  readonly compacted: boolean;
+}
 
 export type WebviewToExtension =
   | { readonly type: "ready" }
@@ -140,7 +165,8 @@ export type WebviewToExtension =
       readonly sessionID: string;
       readonly uris: readonly string[];
     }
-  | { readonly type: "pickFiles"; readonly sessionID: string };
+  | { readonly type: "pickFiles"; readonly sessionID: string }
+  | { readonly type: "compactSession"; readonly sessionID: string };
 
 export type ExtensionToWebview =
   | {
@@ -168,6 +194,7 @@ export type ExtensionToWebview =
       readonly sessionID: string | null;
       readonly status: LoadStatus;
       readonly items: readonly TranscriptItem[];
+      readonly usage: ContextUsage | null;
       readonly error?: string;
     }
   | {
@@ -185,6 +212,18 @@ export type ExtensionToWebview =
       readonly type: "promptStatus";
       readonly sessionID: string;
       readonly status: "submitting" | "accepted" | "error";
+      readonly error?: string;
+    }
+  | {
+      readonly type: "sessionActivity";
+      readonly sessionID: string;
+      readonly busy: boolean;
+      readonly compacting: boolean;
+    }
+  | {
+      readonly type: "compactStatus";
+      readonly sessionID: string;
+      readonly status: "started" | "completed" | "error";
       readonly error?: string;
     }
   | {

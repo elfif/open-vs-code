@@ -22,6 +22,7 @@ import {
   $isContextBadgeNode,
   ContextBadgeNode,
 } from "@/components/ContextBadgeNode";
+import { ContextBar } from "@/components/ContextBar";
 import { PromptToolbar } from "@/components/PromptToolbar";
 import { SkillPickerPlugin } from "@/components/SkillPickerPlugin";
 import { Button } from "@/components/ui/button";
@@ -34,12 +35,14 @@ import {
 } from "@/lib/dropZone";
 import { calculatePromptTextareaHeight } from "@/lib/promptHeight";
 import { postToExtension } from "@/lib/vscode";
+import { findContextLimit } from "@shared/contextBar";
 import {
   isPromptEmpty,
   type PromptContextSegment,
   type PromptSegment,
 } from "@shared/promptContent";
 import type {
+  ContextUsage,
   LoadStatus,
   ModelOption,
   PromptCatalog,
@@ -70,12 +73,17 @@ interface PromptComposerProps {
   readonly catalogStatus: LoadStatus;
   readonly catalogError?: string;
   readonly selection: PromptSelection | null;
+  readonly contextUsage: ContextUsage | null;
+  readonly busy: boolean;
+  readonly compacting: boolean;
+  readonly compactError?: string;
   readonly onChange: (value: readonly PromptSegment[]) => void;
   readonly onInsertsConsumed: (insertIDs: readonly number[]) => void;
   readonly onAgentChange: (agentID: string) => void;
   readonly onModelChange: (model: ModelOption) => void;
   readonly onVariantChange: (variant: string | undefined) => void;
   readonly onSubmit: () => void;
+  readonly onCompact: () => void;
   readonly onPickFiles: () => void;
   readonly onFiles: (files: readonly File[]) => void;
   readonly onUris: (uris: readonly string[]) => void;
@@ -95,12 +103,17 @@ export function PromptComposer({
   catalogStatus,
   catalogError,
   selection,
+  contextUsage,
+  busy,
+  compacting,
+  compactError,
   onChange,
   onInsertsConsumed,
   onAgentChange,
   onModelChange,
   onVariantChange,
   onSubmit,
+  onCompact,
   onPickFiles,
   onFiles,
   onUris,
@@ -253,11 +266,23 @@ export function PromptComposer({
   }, [value, panelHeight]);
 
   const canSubmit =
-    !disabled && !submitting && !staging && selection !== null && !isPromptEmpty(value);
+    !disabled &&
+    !submitting &&
+    !staging &&
+    !compacting &&
+    selection !== null &&
+    !isPromptEmpty(value);
 
   return (
     <div ref={containerRef} className="shrink-0 border-t border-border bg-background p-2">
       <TooltipProvider delayDuration={300}>
+        <ContextBar
+          usage={contextUsage}
+          limit={findContextLimit(catalog, selection?.model ?? null)}
+          busy={busy}
+          compacting={compacting}
+          onCompact={onCompact}
+        />
         <LexicalComposer
           initialConfig={{
             namespace: "OpenCodePrompt",
@@ -341,6 +366,11 @@ export function PromptComposer({
         {error ? (
           <p role="alert" className="mt-1 text-xs text-destructive">
             {error}
+          </p>
+        ) : null}
+        {compactError ? (
+          <p role="alert" className="mt-1 text-xs text-destructive">
+            {compactError}
           </p>
         ) : null}
         <div className="mt-2 flex items-center gap-2">

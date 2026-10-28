@@ -292,4 +292,125 @@ describe("OpenCodeApi mutations", () => {
 
     expect(await api.getActiveSessionIds()).toEqual(new Set(["ses_1", "ses_2"]));
   });
+
+  it("prefers the input limit and falls back to the context limit", async () => {
+    const client = {
+      agent: { list: async () => ({ data: [] }) },
+      model: {
+        list: async () => ({
+          data: [
+            {
+              id: "with-input",
+              providerID: "openai",
+              name: "With Input",
+              enabled: true,
+              variants: [],
+              limit: { context: 400_000, input: 272_000, output: 128_000 },
+            },
+            {
+              id: "context-only",
+              providerID: "openai",
+              name: "Context Only",
+              enabled: true,
+              variants: [],
+              limit: { context: 200_000, output: 64_000 },
+            },
+            {
+              id: "zero-limit",
+              providerID: "openai",
+              name: "Zero Limit",
+              enabled: true,
+              variants: [],
+              limit: { context: 0, output: 0 },
+            },
+          ],
+        }),
+        default: async () => ({ data: null }),
+      },
+      provider: {
+        list: async () => ({ data: [{ id: "openai", name: "OpenAI", activation: "enabled" }] }),
+      },
+      skill: { list: async () => ({ data: [] }) },
+    } as unknown as OpenCodeClient;
+
+    const { OpenCodeApi } = await import("../src/services/openCodeApi");
+    const api = new OpenCodeApi({ serverUrl: "http://localhost:4096", password: "secret" }, client);
+    const catalog = await api.getPromptCatalog("/workspace");
+
+    expect(catalog.models.map((model) => [model.id, model.contextLimit])).toEqual([
+      ["with-input", 272_000],
+      ["context-only", 200_000],
+      ["zero-limit", undefined],
+    ]);
+  });
+
+  it("returns transcript items with the session context usage", async () => {
+    const calls: unknown[] = [];
+    const client = {
+      message: {
+        list: async (input: unknown) => {
+          calls.push(input);
+          return {
+            data: [
+              {
+                id: "a2",
+                type: "assistant",
+                agent: "build",
+                model: { id: "gpt", providerID: "openai" },
+                time: { created: 30 },
+                content: [{ type: "text", text: "latest" }],
+                tokens: {
+                  input: 500,
+                  output: 40,
+                  reasoning: 10,
+                  cache: { read: 1_000, write: 0 },
+                },
+              },
+              {
+                id: "a1",
+                type: "assistant",
+                agent: "build",
+                model: { id: "gpt", providerID: "openai" },
+                time: { created: 10 },
+                content: [{ type: "text", text: "older" }],
+                tokens: {
+                  input: 100,
+                  output: 10,
+                  reasoning: 0,
+                  cache: { read: 0, write: 0 },
+                },
+              },
+            ],
+          };
+        },
+      },
+    } as unknown as OpenCodeClient;
+
+    const { OpenCodeApi } = await import("../src/services/openCodeApi");
+    const api = new OpenCodeApi({ serverUrl: "http://localhost:4096", password: "secret" }, client);
+    const snapshot = await api.listMessages("ses_1");
+
+    expect(calls).toEqual([{ sessionID: "ses_1", limit: 50, order: "desc" }]);
+    expect(snapshot.items.map((item) => item.id)).toEqual(["a1:0", "a2:0"]);
+    expect(snapshot.usage?.total).toBe(1_550);
+    expect(snapshot.messages.map((message) => message.id)).toEqual(["a1", "a2"]);
+  });
+
+  it("compacts a session through the native endpoint", async () => {
+    const calls: unknown[] = [];
+    const client = {
+      session: {
+        compact: async (input: unknown) => {
+          calls.push(input);
+          return { data: { id: "msg_1" } };
+        },
+      },
+    } as unknown as OpenCodeClient;
+
+    const { OpenCodeApi } = await import("../src/services/openCodeApi");
+    const api = new OpenCodeApi({ serverUrl: "http://localhost:4096", password: "secret" }, client);
+    await api.compactSession("ses_1");
+
+    expect(calls).toEqual([{ sessionID: "ses_1" }]);
+  });
 });
