@@ -24,7 +24,7 @@ export function SessionList({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-2 py-1">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <span className="text-3xs font-semibold uppercase tracking-wide text-muted-foreground">
           Sessions
         </span>
         <Button
@@ -83,7 +83,7 @@ export function SessionList({
 
             {groups.map((group) => (
               <section key={group.label} className="flex flex-col gap-1 p-2">
-                <h2 className="px-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                <h2 className="px-2 text-3xs font-semibold uppercase tracking-wide text-muted-foreground">
                   {group.label}
                 </h2>
                 {group.sessions.map((session) => (

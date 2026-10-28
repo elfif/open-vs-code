@@ -14,6 +14,7 @@ import {
 } from "@/lib/promptSelection";
 import { fileToBase64 } from "@/lib/fileTransfer";
 import { onExtensionMessage, postToExtension } from "@/lib/vscode";
+import { FONT_SCALE_CSS_VARIABLE } from "@shared/fontScale";
 import { classifyDocument, formatBytes, MAX_DOCUMENT_BYTES } from "@shared/promptDocuments";
 import { extractSupportedUris } from "@shared/uriList";
 import type { PromptSegment } from "@shared/promptContent";
@@ -66,6 +67,7 @@ interface PanelState {
   readonly compactErrorBySession: Readonly<Record<string, string>>;
   readonly stagingRequestIDsBySession: Readonly<Record<string, readonly string[]>>;
   readonly documentErrorBySession: Readonly<Record<string, string>>;
+  readonly fontScale: number;
 }
 
 const initialState: PanelState = {
@@ -92,6 +94,7 @@ const initialState: PanelState = {
   compactErrorBySession: {},
   stagingRequestIDsBySession: {},
   documentErrorBySession: {},
+  fontScale: 1,
 };
 
 const EMPTY_PROMPT: readonly PromptSegment[] = [];
@@ -152,6 +155,11 @@ function reducer(state: PanelState, action: PanelAction): PanelState {
       return { ...state, authSuccessVisible: false };
     case "workspace":
       return { ...state, workspaceDirectory: action.directory };
+    case "uiSettings": {
+      document.documentElement.style.setProperty(FONT_SCALE_CSS_VARIABLE, String(action.fontScale));
+
+      return { ...state, fontScale: action.fontScale };
+    }
     case "sessions": {
       const nextState = {
         ...state,
@@ -727,6 +735,7 @@ export default function App() {
                 documentError={activeDocumentError}
                 disabled={state.connectionStatus !== "connected"}
                 panelHeight={panelHeight}
+                fontScale={state.fontScale}
                 catalog={state.promptCatalog}
                 catalogStatus={state.promptCatalogStatus}
                 catalogError={state.promptCatalogError}

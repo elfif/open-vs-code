@@ -53,7 +53,7 @@ export function ContextBadge({
         </Badge>
       </TooltipTrigger>
       <TooltipContent className="max-w-[min(32rem,80vw)] p-2">
-        <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-all font-mono text-[10px]">
+        <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-all font-mono text-3xs">
           {formatBadgePreview(segment)}
         </pre>
       </TooltipContent>

@@ -72,6 +72,7 @@ interface PromptComposerProps {
   readonly documentError?: string;
   readonly disabled: boolean;
   readonly panelHeight: number;
+  readonly fontScale: number;
   readonly catalog: PromptCatalog | null;
   readonly catalogStatus: LoadStatus;
   readonly catalogError?: string;
@@ -102,6 +103,7 @@ export function PromptComposer({
   documentError,
   disabled,
   panelHeight,
+  fontScale,
   catalog,
   catalogStatus,
   catalogError,
@@ -266,7 +268,7 @@ export function PromptComposer({
 
     editable.style.height = `${height}px`;
     editable.style.overflowY = capped ? "auto" : "hidden";
-  }, [value, panelHeight]);
+  }, [value, panelHeight, fontScale]);
 
   const canSubmit =
     !disabled &&
@@ -384,10 +386,10 @@ export function PromptComposer({
         <div className="mt-2 flex items-center gap-2">
           <Tooltip>
             <TooltipTrigger asChild>
-              <span className="inline-flex min-w-0 cursor-help items-center text-[11px] leading-4 text-muted-foreground">
+              <span className="inline-flex min-w-0 cursor-help items-center text-2xs leading-4 text-muted-foreground">
                 <span className="truncate">
                   Drop files · hold{" "}
-                  <kbd className="rounded border border-border bg-muted px-1 font-sans text-[10px]">
+                  <kbd className="rounded border border-border bg-muted px-1 font-sans text-3xs">
                     Shift
                   </kbd>
                 </span>
@@ -406,12 +408,12 @@ export function PromptComposer({
               <Paperclip />
               Add files
             </Button>
-            <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
-              <kbd className="rounded border border-border bg-muted px-1 font-sans text-[10px]">
+            <span className="flex items-center gap-1 text-3xs text-muted-foreground">
+              <kbd className="rounded border border-border bg-muted px-1 font-sans text-3xs">
                 Ctrl
               </kbd>
               <span>+</span>
-              <kbd className="rounded border border-border bg-muted px-1 font-sans text-[10px]">
+              <kbd className="rounded border border-border bg-muted px-1 font-sans text-3xs">
                 Enter
               </kbd>
               <span>to send</span>

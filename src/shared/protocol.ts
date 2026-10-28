@@ -255,4 +255,5 @@ export type ExtensionToWebview =
       readonly requestID: string;
       readonly sessionID: string;
       readonly error: string;
-    };
+    }
+  | { readonly type: "uiSettings"; readonly fontScale: number };

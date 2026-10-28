@@ -114,7 +114,7 @@ function TranscriptEntry({
           <Badge>{item.agent}</Badge>
           <Timestamp value={item.timestamp} />
         </div>
-        <div className="mb-2 truncate text-[10px] text-muted-foreground">{item.model}</div>
+        <div className="mb-2 truncate text-3xs text-muted-foreground">{item.model}</div>
         <Markdown>{item.text}</Markdown>
         {item.error ? (
           <div className="mt-2 rounded-md border border-destructive/40 p-2 text-xs text-destructive">
@@ -171,7 +171,7 @@ function TranscriptEntry({
         <Timestamp value={item.timestamp} />
       </div>
       {item.detail ? (
-        <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words text-[10px]">
+        <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words text-3xs">
           {item.detail}
         </pre>
       ) : null}
@@ -222,18 +222,14 @@ function ToolCallEntry({
       </summary>
       {item.input ? (
         <div className="mt-2">
-          <div className="mb-1 text-[10px] font-semibold uppercase text-muted-foreground">
-            Input
-          </div>
-          <pre className="overflow-x-auto rounded-md bg-input p-2 text-[10px]">{item.input}</pre>
+          <div className="mb-1 text-3xs font-semibold uppercase text-muted-foreground">Input</div>
+          <pre className="overflow-x-auto rounded-md bg-input p-2 text-3xs">{item.input}</pre>
         </div>
       ) : null}
       {item.output ? (
         <div className="mt-2">
-          <div className="mb-1 text-[10px] font-semibold uppercase text-muted-foreground">
-            Output
-          </div>
-          <pre className="overflow-x-auto rounded-md bg-input p-2 text-[10px]">{item.output}</pre>
+          <div className="mb-1 text-3xs font-semibold uppercase text-muted-foreground">Output</div>
+          <pre className="overflow-x-auto rounded-md bg-input p-2 text-3xs">{item.output}</pre>
         </div>
       ) : null}
     </details>
@@ -267,7 +263,7 @@ function Timestamp({ value }: { readonly value: number }) {
   }
 
   return (
-    <span className="shrink-0 text-[10px] text-muted-foreground">
+    <span className="shrink-0 text-3xs text-muted-foreground">
       {new Date(value).toLocaleTimeString()}
     </span>
   );

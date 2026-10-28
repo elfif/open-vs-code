@@ -63,12 +63,12 @@ export function ContextBar({ usage, limit, busy, compacting, onCompact }: Contex
             ) : null}
           </div>
         </TooltipTrigger>
-        <TooltipContent side="top" className="whitespace-pre-line font-mono text-[11px]">
+        <TooltipContent side="top" className="whitespace-pre-line font-mono text-2xs">
           {`${LEVEL_LABEL[level]}\n${formatContextTooltip(usage, limit)}`}
         </TooltipContent>
       </Tooltip>
       <div className="mt-1 flex items-center gap-2">
-        <span className="min-w-0 truncate text-[11px] leading-4 text-muted-foreground">
+        <span className="min-w-0 truncate text-2xs leading-4 text-muted-foreground">
           {!hasUsage
             ? "No context used yet"
             : usage.compacted
@@ -80,7 +80,7 @@ export function ContextBar({ usage, limit, busy, compacting, onCompact }: Contex
           size="sm"
           variant="outline"
           className={cn(
-            "ml-auto h-7 shrink-0 px-2 text-[11px]",
+            "ml-auto h-7 shrink-0 px-2 text-2xs",
             compactWarning && "border-context-warn bg-context-warn/15 font-bold text-context-warn",
           )}
           disabled={compactDisabled}

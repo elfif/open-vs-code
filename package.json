@@ -19,6 +19,26 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "OpenCode",
+      "properties": {
+        "openVsCode.fontSize": {
+          "type": "string",
+          "enum": [
+            "small",
+            "standard",
+            "large"
+          ],
+          "default": "standard",
+          "description": "Font size for the OpenCode sidebar panel. Standard matches the VS Code UI font size. The whole panel (text, spacing, controls) scales together.",
+          "enumDescriptions": [
+            "90% of the standard size",
+            "Matches the VS Code UI font size",
+            "115% of the standard size"
+          ]
+        }
+      }
+    },
     "commands": [
       {
         "command": "openVsCode.openPanel",

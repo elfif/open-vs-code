@@ -22,6 +22,11 @@ import {
   type WebviewToExtension,
 } from "../shared/protocol";
 import { findCompactionAfter } from "../services/contextUsage";
+import {
+  DEFAULT_FONT_SIZE_SETTING,
+  FONT_SCALE_CSS_VARIABLE,
+  resolveFontScale,
+} from "../shared/fontScale";
 import { CredentialStore, type StoredCredential } from "../services/credentialStore";
 import {
   createDocumentFromBytes,
@@ -73,6 +78,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private webviewReady = false;
   private pendingContexts: PromptContextSegment[][] = [];
   private readonly documentStore = new DocumentStore();
+  private readonly disposables: vscode.Disposable[] = [];
 
   public constructor(
     private readonly extensionUri: vscode.Uri,
@@ -95,6 +101,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           await this.refreshActiveStatus();
           await this.refreshTranscript();
         }),
+    );
+
+    this.disposables.push(
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration("openVsCode.fontSize")) {
+          this.postMessage({ type: "uiSettings", fontScale: this.getFontScale() });
+        }
+      }),
     );
   }
 
@@ -129,6 +143,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this.documentStore.clearAll();
       visibilitySubscription.dispose();
       messageSubscription.dispose();
+
+      for (const disposable of this.disposables) {
+        disposable.dispose();
+      }
     });
   }
 
@@ -281,6 +299,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private async initialize(): Promise<void> {
     this.postMessage({ type: "connection", status: "checking" });
     this.postMessage({ type: "workspace", directory: this.getWorkspaceDirectory() });
+    this.postMessage({ type: "uiSettings", fontScale: this.getFontScale() });
 
     const credential = await this.credentialStore.read();
     this.credential = credential;
@@ -1147,6 +1166,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     this.transcriptPolling.setVisible(false);
   }
 
+  private getFontScale(): number {
+    const setting = vscode.workspace
+      .getConfiguration("openVsCode")
+      .get<string>("fontSize", DEFAULT_FONT_SIZE_SETTING);
+
+    return resolveFontScale(setting);
+  }
+
   private getWorkspaceDirectory(): string | null {
     const folder = vscode.workspace.workspaceFolders?.[0];
 
@@ -1183,9 +1210,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       vscode.Uri.joinPath(this.extensionUri, "dist", "webview", "index.css"),
     );
     const nonce = getNonce();
+    const fontScale = this.getFontScale();
 
     return /* html */ `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" style="${FONT_SCALE_CSS_VARIABLE}: ${fontScale}">
   <head>
     <meta charset="UTF-8" />
     <meta
