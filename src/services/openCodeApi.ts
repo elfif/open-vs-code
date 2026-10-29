@@ -188,10 +188,11 @@ export class OpenCodeApi {
   }
 
   public async getPromptCatalog(directory: string, signal?: AbortSignal): Promise<PromptCatalog> {
-    const [agents, models, providers, skills, defaultModel] = await Promise.all([
+    const [agents, models, providers, commands, skills, defaultModel] = await Promise.all([
       this.client.agent.list({ location: { directory } }, { signal }),
       this.client.model.list({ location: { directory } }, { signal }),
       this.client.provider.list({ location: { directory } }, { signal }),
+      this.client.command.list({ location: { directory } }, { signal }),
       this.client.skill.list({ location: { directory } }, { signal }),
       this.client.model
         .default({ location: { directory } }, { signal })
@@ -232,6 +233,10 @@ export class OpenCodeApi {
       providers: providers.data
         .filter((provider) => provider.activation !== "disabled")
         .map((provider) => ({ id: provider.id, name: provider.name })),
+      commands: commands.data.map((command) => ({
+        name: command.name,
+        ...(command.description ? { description: command.description } : {}),
+      })),
       skills: skills.data.map((skill) => ({ id: skill.id, name: skill.name })),
       defaultModel: defaultModel.data ? toPromptModel(defaultModel.data) : null,
     };
@@ -250,6 +255,29 @@ export class OpenCodeApi {
     await this.client.session.prompt(
       {
         sessionID,
+        text,
+        ...(files.length > 0 ? { files } : {}),
+        ...(skills.length > 0 ? { skills } : {}),
+      },
+      { signal },
+    );
+  }
+
+  public async command(
+    sessionID: string,
+    name: string,
+    text: string,
+    files: readonly PromptFileAttachmentInput[],
+    skills: readonly PromptSkillAttachmentInput[],
+    selection: PromptSelection,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.client.session.switchAgent({ sessionID, agent: selection.agent }, { signal });
+    await this.client.session.switchModel({ sessionID, model: selection.model }, { signal });
+    await this.client.session.command(
+      {
+        sessionID,
+        name,
         text,
         ...(files.length > 0 ? { files } : {}),
         ...(skills.length > 0 ? { skills } : {}),

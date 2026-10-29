@@ -18,6 +18,12 @@ const selection: PromptSegment = {
   languageId: "typescriptreact",
 };
 
+const command: PromptSegment = {
+  kind: "command",
+  name: "review",
+  description: "Review changes",
+};
+
 const skill: PromptSegment = {
   kind: "skill",
   id: "git-release",
@@ -83,12 +89,21 @@ const second = false;
     }
   });
 
-  it("serializes skills as slash text and native attachments", () => {
+  it("serializes commands as slash text", () => {
+    const result = buildPromptPayload([command, { kind: "text", text: " src/App.tsx" }], new Map());
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.payload.text).toBe("/review src/App.tsx");
+    }
+  });
+
+  it("serializes skills as at-sign text and native attachments", () => {
     const result = buildPromptPayload([skill, { kind: "text", text: " prepare v2" }], new Map());
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.payload.text).toBe("/git-release prepare v2");
+      expect(result.payload.text).toBe("@git-release prepare v2");
       expect(result.payload.skills).toEqual([{ id: "git-release" }]);
     }
   });
@@ -98,7 +113,7 @@ const second = false;
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.payload.text).toBe("/git-release/git-release");
+      expect(result.payload.text).toBe("@git-release@git-release");
       expect(result.payload.skills).toEqual([{ id: "git-release" }]);
     }
   });

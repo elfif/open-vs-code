@@ -57,6 +57,11 @@ export interface SkillOption {
   readonly name: string;
 }
 
+export interface CommandOption {
+  readonly name: string;
+  readonly description?: string;
+}
+
 export interface PromptCatalog {
   readonly agents: readonly AgentOption[];
   /**
@@ -66,6 +71,7 @@ export interface PromptCatalog {
   readonly agentColors: Readonly<Record<string, string>>;
   readonly models: readonly ModelOption[];
   readonly providers: readonly ProviderOption[];
+  readonly commands: readonly CommandOption[];
   readonly skills: readonly SkillOption[];
   readonly defaultModel: PromptModel | null;
 }

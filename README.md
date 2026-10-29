@@ -2,10 +2,11 @@
 
 Open VS Code is a VS Code extension that connects directly to an OpenCode V2 HTTP server and provides an OpenCode session browser and prompt composer in the sidebar.
 Main difference with the officialm extension is that this extension relies directly on the OpenCode API instead oof just calling the existing TUI in a side panel.
-This allow further integration of the opencode features in vs code like: 
-* contextual menus
-* global commands and shortcuts
-* global theme adoption 
+This allow further integration of the opencode features in vs code like:
+
+- contextual menus
+- global commands and shortcuts
+- global theme adoption
 
 ## Features
 
@@ -24,6 +25,8 @@ This allow further integration of the opencode features in vs code like:
   - Closable session detail tabs
 - Create a new OpenCode session from the Sessions view.
 - Send plain-text prompts to existing sessions.
+- Slash command picker for OpenCode commands, with native `session.command` execution and argument support.
+- At-sign skill picker for OpenCode skills, with native `skills[]` attachments.
 - Add files or exact editor selections as inline context badges from VS Code context menus or `Ctrl+Alt+O` (`Cmd+Alt+O` on macOS).
 - Per-session prompt drafts, including context badges.
 - Transcript rendering:
@@ -142,6 +145,8 @@ The new session opens in a sidebar tab immediately after creation.
 
 Each open session tab has a plain-text prompt composer with inline context badges.
 
+- Typing `/` at the start of the prompt opens the command picker. Selecting a command inserts a removable `/command` badge; the extension host executes recognized leading commands through `session.command`, passing the remaining prompt text as arguments.
+- Typing `@` at the start of the prompt or after whitespace opens the skill picker. Selecting a skill inserts a removable `@skill-id` badge and sends a native OpenCode skill attachment.
 - Right-click a file (or multiple files) in the Explorer and choose **OpenCode: Add to Session** to insert filename badges. Submitted prompts contain the absolute paths.
 - Right-click selected code and choose **OpenCode: Add to Session** to insert a filename/line-range badge. The badge tooltip shows the captured code. Submitted prompts contain the absolute path, line range, language, and exact selected code in a `### File content` block, even if the file changes later.
 - `Ctrl+Alt+O` (`Cmd+Alt+O` on macOS) invokes the same command from the editor or Explorer.
@@ -179,6 +184,7 @@ src/
   extension.ts                  Extension activation and command registration
   shared/
     protocol.ts                 Typed extension/webview messages
+    promptCommands.ts           Command invocation parsing
     promptContent.ts            Context badges and prompt serialization
   services/
     credentialStore.ts          SecretStorage-backed credential persistence
@@ -195,11 +201,14 @@ webview/
     components/
       AuthPanel.tsx             Authentication form
       PromptComposer.tsx      Lexical prompt composer with context badges
+      PromptPicker.tsx        Command and skill picker
+      PromptToolbar.tsx       Agent, model, and variant controls
       SessionTabs.tsx         In-sidebar tabs
       SessionList.tsx         Grouped session list and new-session action
       TranscriptView.tsx      Transcript renderer
       ui/                       shadcn/ui components
     lib/
+      triggerPicker.ts          Command and skill trigger filtering/placement
       vscode.ts                 VS Code webview bridge
     App.tsx                     Sidebar state and screen routing
     index.css                   Tailwind and VS Code theme mapping
@@ -216,10 +225,9 @@ dist/
 
 - Starting or managing the OpenCode server.
 - Tool configuration or manual tool invocation.
-- OpenCode commands and shortcut handling.
 - MCP selection or configuration.
 - Model or agent selection.
-- Binary file attachments, @-mentions, and skills.
+- @-mentions.
 - Streaming/event subscriptions.
 - Stop, cancel, revert, rename, or delete actions.
 - Session search.

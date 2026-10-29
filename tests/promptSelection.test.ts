@@ -39,6 +39,7 @@ const catalog: PromptCatalog = {
     { id: "openai", name: "OpenAI" },
     { id: "anthropic", name: "Anthropic" },
   ],
+  commands: [],
   defaultModel: { providerID: "anthropic", id: "claude-sonnet" },
 };
 

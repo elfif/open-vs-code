@@ -26,7 +26,7 @@ import {
 } from "@/components/ContextBadgeNode";
 import { ContextBar } from "@/components/ContextBar";
 import { PromptToolbar } from "@/components/PromptToolbar";
-import { SkillPickerPlugin } from "@/components/SkillPickerPlugin";
+import { PromptPickerPlugin } from "@/components/PromptPickerPlugin";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -45,6 +45,7 @@ import {
   type PromptSegment,
 } from "@shared/promptContent";
 import type {
+  CommandOption,
   ContextUsage,
   LoadStatus,
   ModelOption,
@@ -56,6 +57,7 @@ import type {
 const DRAG_HINT =
   "VS Code blocks drag events over webviews while a drag is in progress, so a plain drop is routed to the editor instead of this panel. Hold Shift while dropping to deliver the files here.";
 
+const EMPTY_COMMANDS: readonly CommandOption[] = [];
 const EMPTY_SKILLS: readonly SkillOption[] = [];
 
 export interface PendingContextInsert {
@@ -314,7 +316,7 @@ export function PromptComposer({
               }
               placeholder={
                 <div className="pointer-events-none absolute left-3 top-2 text-xs leading-5 text-muted-foreground">
-                  Send a prompt or type / for skills
+                  Send a prompt · / commands · @ skills
                 </div>
               }
               ErrorBoundary={LexicalErrorBoundary}
@@ -324,7 +326,8 @@ export function PromptComposer({
             <SubmitShortcutPlugin enabled={canSubmit} onSubmit={onSubmit} />
             <DraftPlugin onChange={onChange} />
             <InsertContextPlugin pendingInserts={pendingInserts} onConsumed={onInsertsConsumed} />
-            <SkillPickerPlugin
+            <PromptPickerPlugin
+              commands={catalog?.commands ?? EMPTY_COMMANDS}
               skills={catalog?.skills ?? EMPTY_SKILLS}
               containerRef={editorWrapRef}
               disabled={locked}

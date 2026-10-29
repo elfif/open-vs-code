@@ -7,6 +7,7 @@ import type {
 } from "./promptTypes";
 
 export type {
+  PromptCommandSegment,
   PromptContextSegment,
   PromptDocumentSegment,
   PromptSegment,
@@ -18,8 +19,12 @@ export type {
 const PREVIEW_LINE_LIMIT = 12;
 
 export function formatBadgeLabel(segment: PromptContextSegment): string {
+  if (segment.kind === "command") {
+    return `/${segment.name}`;
+  }
+
   if (segment.kind === "skill") {
-    return `/${segment.id}`;
+    return `@${segment.id}`;
   }
 
   if (segment.kind === "document") {
@@ -34,6 +39,12 @@ export function formatBadgeLabel(segment: PromptContextSegment): string {
 }
 
 export function formatBadgePreview(segment: PromptContextSegment): string {
+  if (segment.kind === "command") {
+    return segment.description
+      ? `Command: ${segment.name}\n${segment.description}`
+      : `Command: ${segment.name}`;
+  }
+
   if (segment.kind === "skill") {
     return `Skill: ${segment.name}\nID: ${segment.id}`;
   }
@@ -78,6 +89,13 @@ export function isPromptSegment(value: unknown): value is PromptSegment {
         typeof value.mime === "string" &&
         typeof value.size === "number" &&
         (!("path" in value) || typeof value.path === "string")
+      );
+    case "command":
+      return (
+        "name" in value &&
+        typeof value.name === "string" &&
+        value.name.length > 0 &&
+        (!("description" in value) || typeof value.description === "string")
       );
     case "skill":
       return (

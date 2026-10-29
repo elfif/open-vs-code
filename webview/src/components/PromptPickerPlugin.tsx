@@ -10,40 +10,48 @@ import {
 } from "lexical";
 
 import { $createContextBadgeNode } from "@/components/ContextBadgeNode";
-import { SkillPicker } from "@/components/SkillPicker";
+import { PromptPicker } from "@/components/PromptPicker";
 import {
-  calculateSkillMenuPosition,
+  calculateTriggerMenuPosition,
+  filterCommandOptions,
   filterSkillOptions,
-  findSkillQuery,
-  type SkillMenuCaretRect,
-  type SkillMenuPosition,
-  type SkillQuery,
-} from "@/lib/skillTrigger";
-import type { SkillOption } from "@shared/protocol";
+  findTriggerQuery,
+  type PickerOption,
+  type TriggerMenuCaretRect,
+  type TriggerMenuPosition,
+  type TriggerQuery,
+} from "@/lib/triggerPicker";
+import type { CommandOption, SkillOption } from "@shared/protocol";
 
-interface SkillMenuState {
-  readonly query: SkillQuery;
-  readonly options: readonly SkillOption[];
+interface PickerMenuState {
+  readonly query: TriggerQuery;
+  readonly options: readonly PickerOption[];
   readonly activeIndex: number;
-  readonly caretRect: SkillMenuCaretRect;
+  readonly caretRect: TriggerMenuCaretRect;
 }
 
-interface SkillPickerPluginProps {
+interface PromptPickerPluginProps {
+  readonly commands: readonly CommandOption[];
   readonly skills: readonly SkillOption[];
   readonly containerRef: RefObject<HTMLDivElement | null>;
   readonly disabled: boolean;
 }
 
-export function SkillPickerPlugin({ skills, containerRef, disabled }: SkillPickerPluginProps) {
+export function PromptPickerPlugin({
+  commands,
+  skills,
+  containerRef,
+  disabled,
+}: PromptPickerPluginProps) {
   const [editor] = useLexicalComposerContext();
-  const [menu, setMenu] = useState<SkillMenuState | null>(null);
-  const [position, setPosition] = useState<SkillMenuPosition | null>(null);
+  const [menu, setMenu] = useState<PickerMenuState | null>(null);
+  const [position, setPosition] = useState<TriggerMenuPosition | null>(null);
   const pickerRef = useRef<HTMLDivElement | null>(null);
-  const menuRef = useRef<SkillMenuState | null>(null);
-  const selectSkillRef = useRef<(skill: SkillOption) => void>(() => undefined);
+  const menuRef = useRef<PickerMenuState | null>(null);
+  const selectOptionRef = useRef<(option: PickerOption) => void>(() => undefined);
 
-  const selectSkill = useCallback(
-    (skill: SkillOption) => {
+  const selectOption = useCallback(
+    (option: PickerOption) => {
       editor.update(() => {
         const selection = $getSelection();
 
@@ -58,7 +66,14 @@ export function SkillPickerPlugin({ skills, containerRef, disabled }: SkillPicke
           return;
         }
 
-        const query = findSkillQuery(node.getTextContent(), anchor.offset);
+        const query = findTriggerQuery(
+          node.getTextContent(),
+          anchor.offset,
+          option.kind === "command" ? "/" : "@",
+          {
+            startOnly: option.kind === "command",
+          },
+        );
 
         if (!query) {
           return;
@@ -67,7 +82,15 @@ export function SkillPickerPlugin({ skills, containerRef, disabled }: SkillPicke
         selection.anchor.set(node.getKey(), query.start, "text");
         selection.focus.set(node.getKey(), query.end, "text");
         selection.insertNodes([
-          $createContextBadgeNode({ kind: "skill", id: skill.id, name: skill.name }),
+          $createContextBadgeNode(
+            option.kind === "command"
+              ? {
+                  kind: "command",
+                  name: option.id,
+                  ...(option.description ? { description: option.description } : {}),
+                }
+              : { kind: "skill", id: option.id, name: option.label },
+          ),
           $createTextNode(" "),
         ]);
       });
@@ -83,8 +106,8 @@ export function SkillPickerPlugin({ skills, containerRef, disabled }: SkillPicke
   }, [menu]);
 
   useEffect(() => {
-    selectSkillRef.current = selectSkill;
-  }, [selectSkill]);
+    selectOptionRef.current = selectOption;
+  }, [selectOption]);
 
   useLayoutEffect(
     () =>
@@ -94,7 +117,7 @@ export function SkillPickerPlugin({ skills, containerRef, disabled }: SkillPicke
           return;
         }
 
-        let nextMenu: SkillMenuState | null = null;
+        let nextMenu: PickerMenuState | null = null;
 
         editorState.read(() => {
           const selection = $getSelection();
@@ -110,9 +133,28 @@ export function SkillPickerPlugin({ skills, containerRef, disabled }: SkillPicke
             return;
           }
 
-          const query = findSkillQuery(node.getTextContent(), anchor.offset);
+          const text = node.getTextContent();
+          const commandQuery = findTriggerQuery(text, anchor.offset, "/", { startOnly: true });
 
-          if (!query) {
+          if (commandQuery) {
+            const caretRect = getCaretRect();
+
+            if (!caretRect) {
+              return;
+            }
+
+            nextMenu = {
+              query: commandQuery,
+              options: filterCommandOptions(commands, commandQuery.query),
+              activeIndex: 0,
+              caretRect,
+            };
+            return;
+          }
+
+          const skillQuery = findTriggerQuery(text, anchor.offset, "@");
+
+          if (!skillQuery) {
             return;
           }
 
@@ -123,8 +165,8 @@ export function SkillPickerPlugin({ skills, containerRef, disabled }: SkillPicke
           }
 
           nextMenu = {
-            query,
-            options: filterSkillOptions(skills, query.query),
+            query: skillQuery,
+            options: filterSkillOptions(skills, skillQuery.query),
             activeIndex: 0,
             caretRect,
           };
@@ -132,7 +174,7 @@ export function SkillPickerPlugin({ skills, containerRef, disabled }: SkillPicke
 
         setMenu(nextMenu);
       }),
-    [disabled, editor, skills],
+    [commands, disabled, editor, skills],
   );
 
   useLayoutEffect(() => {
@@ -143,7 +185,7 @@ export function SkillPickerPlugin({ skills, containerRef, disabled }: SkillPicke
 
     const container = containerRef.current.getBoundingClientRect();
     const picker = pickerRef.current.getBoundingClientRect();
-    const next = calculateSkillMenuPosition(
+    const next = calculateTriggerMenuPosition(
       menu.caretRect,
       { width: picker.width, height: picker.height },
       {
@@ -207,11 +249,11 @@ export function SkillPickerPlugin({ skills, containerRef, disabled }: SkillPicke
         }
 
         if (event.key === "Enter" || event.key === "Tab") {
-          const skill = current.options[current.activeIndex];
+          const option = current.options[current.activeIndex];
 
-          if (skill) {
+          if (option) {
             event.preventDefault();
-            selectSkillRef.current(skill);
+            selectOptionRef.current(option);
             return true;
           }
         }
@@ -267,19 +309,20 @@ export function SkillPickerPlugin({ skills, containerRef, disabled }: SkillPicke
   }
 
   return (
-    <SkillPicker
+    <PromptPicker
       ref={pickerRef}
+      label={menu.query.trigger === "/" ? "Commands" : "Skills"}
       options={menu.options}
       activeIndex={menu.activeIndex}
       position={position}
       visible={position !== null}
-      onSelect={selectSkill}
+      onSelect={selectOption}
       onHover={(index) => setMenu((state) => (state ? { ...state, activeIndex: index } : state))}
     />
   );
 }
 
-function getCaretRect(): SkillMenuCaretRect | null {
+function getCaretRect(): TriggerMenuCaretRect | null {
   const selection = window.getSelection();
 
   if (!selection || selection.rangeCount === 0) {

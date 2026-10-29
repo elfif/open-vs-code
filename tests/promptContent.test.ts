@@ -26,6 +26,12 @@ const document: PromptContextSegment = {
   path: "docs/notes.md",
 };
 
+const command: PromptContextSegment = {
+  kind: "command",
+  name: "review",
+  description: "Review changes",
+};
+
 const skill: PromptContextSegment = {
   kind: "skill",
   id: "git-release",
@@ -42,14 +48,22 @@ describe("formatBadgeLabel", () => {
     expect(formatBadgeLabel(selection)).toBe("App.tsx - l12 - 14");
   });
 
-  it("shows the skill id with a slash", () => {
-    expect(formatBadgeLabel(skill)).toBe("/git-release");
+  it("shows the command name with a slash", () => {
+    expect(formatBadgeLabel(command)).toBe("/review");
+  });
+
+  it("shows the skill id with an at sign", () => {
+    expect(formatBadgeLabel(skill)).toBe("@git-release");
   });
 });
 
 describe("formatBadgePreview", () => {
   it("shows document path, mime, and size", () => {
     expect(formatBadgePreview(document)).toBe("docs/notes.md\ntext/markdown • 2.0 KB");
+  });
+
+  it("shows the command name and description", () => {
+    expect(formatBadgePreview(command)).toBe("Command: review\nReview changes");
   });
 
   it("shows the skill name and id", () => {
@@ -71,6 +85,7 @@ describe("isPromptEmpty", () => {
   it("accepts badges without additional text", () => {
     expect(isPromptEmpty([document])).toBe(false);
     expect(isPromptEmpty([selection])).toBe(false);
+    expect(isPromptEmpty([command])).toBe(false);
     expect(isPromptEmpty([skill])).toBe(false);
   });
 
@@ -85,6 +100,7 @@ describe("isPromptSegment", () => {
     expect(isPromptSegment({ kind: "text", text: "hello" })).toBe(true);
     expect(isPromptSegment(document)).toBe(true);
     expect(isPromptSegment(selection)).toBe(true);
+    expect(isPromptSegment(command)).toBe(true);
     expect(isPromptSegment(skill)).toBe(true);
   });
 
@@ -93,6 +109,7 @@ describe("isPromptSegment", () => {
     expect(isPromptSegment({ kind: "document" })).toBe(false);
     expect(isPromptSegment({ ...selection, startLine: 0 })).toBe(false);
     expect(isPromptSegment({ ...selection, startLine: 15 })).toBe(false);
+    expect(isPromptSegment({ kind: "command", name: "" })).toBe(false);
     expect(isPromptSegment({ kind: "skill", id: "", name: "Missing id" })).toBe(false);
     expect(isPromptSegment({ kind: "unknown" })).toBe(false);
   });

@@ -66,7 +66,7 @@ export function TranscriptView({ items, loading, error, agentColors }: Transcrip
         <div className="flex flex-col gap-2">
           {groupTranscriptToolCalls(items).map((entry) =>
             entry.kind === "tool-group" ? (
-              <ToolCallGroup key={entry.id} entry={entry} agentColors={agentColors} />
+              <ToolCallGroup key={entry.id} entry={entry} />
             ) : (
               <TranscriptEntry key={entry.id} item={entry.item} agentColors={agentColors} />
             ),
@@ -84,11 +84,12 @@ function TranscriptEntry({
   readonly item: TranscriptItem;
   readonly agentColors: Readonly<Record<string, string>>;
 }) {
-  const accent = agentAccent(agentColors, "agent" in item ? item.agent : undefined);
-
   if (item.kind === "user") {
     return (
-      <article className="rounded-md border border-border bg-card p-2" style={accent}>
+      <article
+        className="rounded-md border border-border bg-card p-2"
+        style={agentAccent(agentColors, item.agent)}
+      >
         <div className="mb-1 flex items-center justify-between gap-2">
           <Badge variant="secondary">User</Badge>
           <Timestamp value={item.timestamp} />
@@ -109,7 +110,7 @@ function TranscriptEntry({
 
   if (item.kind === "assistant") {
     return (
-      <article className="rounded-md border border-border bg-card p-2" style={accent}>
+      <article className="rounded-md border border-border bg-card p-2">
         <div className="mb-1 flex items-center justify-between gap-2">
           <Badge>{item.agent}</Badge>
           <Timestamp value={item.timestamp} />
@@ -127,7 +128,7 @@ function TranscriptEntry({
 
   if (item.kind === "reasoning") {
     return (
-      <details className="rounded-md border border-border bg-muted/30 p-2 text-xs" style={accent}>
+      <details className="rounded-md border border-border bg-muted/30 p-2 text-xs">
         <summary className="cursor-pointer font-medium text-muted-foreground">Reasoning</summary>
         <Markdown>{item.text}</Markdown>
       </details>
@@ -135,7 +136,7 @@ function TranscriptEntry({
   }
 
   if (item.kind === "tool") {
-    return <ToolCallEntry item={item} agentColors={agentColors} />;
+    return <ToolCallEntry item={item} />;
   }
 
   if (item.kind === "compaction") {
@@ -181,41 +182,29 @@ function TranscriptEntry({
 
 function ToolCallGroup({
   entry,
-  agentColors,
 }: {
   readonly entry: {
     readonly agent?: string;
     readonly items: readonly ToolTranscriptItem[];
   };
-  readonly agentColors: Readonly<Record<string, string>>;
 }) {
-  const accent = agentAccent(agentColors, entry.agent);
-
   return (
-    <details className="rounded-md border border-border bg-muted/30 p-2 text-xs" style={accent}>
+    <details className="rounded-md border border-border bg-muted/30 p-2 text-xs">
       <summary className="cursor-pointer font-medium text-muted-foreground">
         {`${entry.items.length} tool calls`}
       </summary>
       <div className="mt-2 flex flex-col gap-2">
         {entry.items.map((item) => (
-          <ToolCallEntry key={item.id} item={item} agentColors={agentColors} />
+          <ToolCallEntry key={item.id} item={item} />
         ))}
       </div>
     </details>
   );
 }
 
-function ToolCallEntry({
-  item,
-  agentColors,
-}: {
-  readonly item: ToolTranscriptItem;
-  readonly agentColors: Readonly<Record<string, string>>;
-}) {
-  const accent = agentAccent(agentColors, item.agent);
-
+function ToolCallEntry({ item }: { readonly item: ToolTranscriptItem }) {
   return (
-    <details className="rounded-md border border-border bg-muted/30 p-2 text-xs" style={accent}>
+    <details className="rounded-md border border-border bg-muted/30 p-2 text-xs">
       <summary className="flex cursor-pointer items-center justify-between gap-2">
         <span className="truncate font-medium">Tool: {item.name}</span>
         <Badge variant="outline">{item.status}</Badge>

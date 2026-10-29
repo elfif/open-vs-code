@@ -8,6 +8,7 @@ import {
   type PromptSegment,
 } from "../shared/promptContent";
 import { buildPromptPayload, MAX_DOCUMENT_BYTES, formatBytes } from "../shared/promptDocuments";
+import { parseCommandInvocation } from "../shared/promptCommands";
 import {
   SESSIONS_TAB_ID,
   type ContextUsage,
@@ -658,6 +659,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
 
     const { text, files, skills } = build.payload;
+    const command = parseCommandInvocation(text, this.promptCatalog?.commands ?? []);
 
     this.promptSubmitting.add(sessionID);
     this.setOptimisticallyActive(sessionID);
@@ -670,14 +672,26 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           return;
         }
 
-        await this.api.prompt(
-          sessionID,
-          text,
-          files,
-          skills,
-          selection,
-          AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-        );
+        if (command) {
+          await this.api.command(
+            sessionID,
+            command.name,
+            command.args,
+            files,
+            skills,
+            selection,
+            AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          );
+        } else {
+          await this.api.prompt(
+            sessionID,
+            text,
+            files,
+            skills,
+            selection,
+            AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          );
+        }
         this.setOptimisticallyActive(sessionID);
         this.postMessage({ type: "promptStatus", sessionID, status: "accepted" });
         this.documentStore.remove(sessionID, build.referencedDocumentIDs);
@@ -740,6 +754,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         agentColors: {},
         models: [],
         providers: [],
+        commands: [],
         skills: [],
         defaultModel: null,
       };

@@ -21,6 +21,12 @@ export interface PromptDocumentSegment {
   readonly path?: string;
 }
 
+export interface PromptCommandSegment {
+  readonly kind: "command";
+  readonly name: string;
+  readonly description?: string;
+}
+
 export interface PromptSkillSegment {
   readonly kind: "skill";
   readonly id: string;
@@ -28,6 +34,10 @@ export interface PromptSkillSegment {
 }
 
 export type PromptSegment =
-  PromptTextSegment | PromptSelectionSegment | PromptDocumentSegment | PromptSkillSegment;
+  | PromptTextSegment
+  | PromptSelectionSegment
+  | PromptDocumentSegment
+  | PromptCommandSegment
+  | PromptSkillSegment;
 
 export type PromptContextSegment = Exclude<PromptSegment, PromptTextSegment>;

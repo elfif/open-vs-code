@@ -535,13 +535,18 @@ export function buildPromptPayload(
       continue;
     }
 
+    if (segment.kind === "command") {
+      appendContent(`/${segment.name}`, false);
+      continue;
+    }
+
     if (segment.kind === "skill") {
       if (!seenSkillIDs.has(segment.id)) {
         seenSkillIDs.add(segment.id);
         skills.push({ id: segment.id });
       }
 
-      appendContent(`/${segment.id}`, false);
+      appendContent(`@${segment.id}`, false);
       continue;
     }
 

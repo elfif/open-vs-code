@@ -166,6 +166,58 @@ describe("OpenCodeApi mutations", () => {
     ]);
   });
 
+  it("switches agent and model before running a command", async () => {
+    const calls: Array<[string, unknown]> = [];
+    const client = {
+      session: {
+        switchAgent: async (input: unknown) => {
+          calls.push(["agent", input]);
+        },
+        switchModel: async (input: unknown) => {
+          calls.push(["model", input]);
+        },
+        command: async (input: unknown) => {
+          calls.push(["command", input]);
+        },
+      },
+    } as unknown as OpenCodeClient;
+
+    const { OpenCodeApi } = await import("../src/services/openCodeApi");
+    const api = new OpenCodeApi({ serverUrl: "http://localhost:4096", password: "secret" }, client);
+    await api.command(
+      "ses_1",
+      "review",
+      "src/App.tsx",
+      [{ uri: "data:text/plain;base64,aGk=", name: "note.txt" }],
+      [{ id: "release" }],
+      {
+        agent: "build",
+        model: { providerID: "openai", id: "gpt-5", variant: "high" },
+      },
+    );
+
+    expect(calls).toEqual([
+      ["agent", { sessionID: "ses_1", agent: "build" }],
+      [
+        "model",
+        {
+          sessionID: "ses_1",
+          model: { providerID: "openai", id: "gpt-5", variant: "high" },
+        },
+      ],
+      [
+        "command",
+        {
+          sessionID: "ses_1",
+          name: "review",
+          text: "src/App.tsx",
+          files: [{ uri: "data:text/plain;base64,aGk=", name: "note.txt" }],
+          skills: [{ id: "release" }],
+        },
+      ],
+    ]);
+  });
+
   it("loads selectable agents, models, providers, and the default model", async () => {
     const inputs: unknown[] = [];
     const location = { location: { directory: "/workspace" } };
@@ -234,6 +286,14 @@ describe("OpenCodeApi mutations", () => {
           };
         },
       },
+      command: {
+        list: async (input: unknown) => {
+          inputs.push(input);
+          return {
+            data: [{ name: "review", description: "Review changes" }, { name: "hidden" }],
+          };
+        },
+      },
       skill: {
         list: async (input: unknown) => {
           inputs.push(input);
@@ -285,10 +345,11 @@ describe("OpenCodeApi mutations", () => {
         },
       ],
       providers: [{ id: "openai", name: "OpenAI" }],
+      commands: [{ name: "review", description: "Review changes" }, { name: "hidden" }],
       skills: [{ id: "release", name: "Git Release" }],
       defaultModel: { providerID: "openai", id: "gpt-5" },
     });
-    expect(inputs).toEqual([location, location, location, location, location]);
+    expect(inputs).toEqual([location, location, location, location, location, location]);
   });
 
   it("reads active session IDs", async () => {
@@ -344,6 +405,7 @@ describe("OpenCodeApi mutations", () => {
       provider: {
         list: async () => ({ data: [{ id: "openai", name: "OpenAI", activation: "enabled" }] }),
       },
+      command: { list: async () => ({ data: [] }) },
       skill: { list: async () => ({ data: [] }) },
     } as unknown as OpenCodeClient;
 

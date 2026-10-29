@@ -217,6 +217,7 @@ describe("findContextLimit", () => {
       { id: "plain", providerID: "openai", name: "Plain", variants: [] },
     ],
     providers: [],
+    commands: [],
     skills: [],
     defaultModel: null,
   };
